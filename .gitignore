@@ -1,1 +1,9 @@
+.vscode/
+
 traces/
+
+*.zip
+*.exe
+*.out
+
+tmp*

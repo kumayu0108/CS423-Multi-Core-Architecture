@@ -22,9 +22,31 @@ class Cache{
             timeBlockAddedL3(L3_SETS, std::vector <ull> (NUM_L3_TAGS, 0)),
             l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0) {}
 
-        virtual void simulator(char type, ull addr) = 0;
+        // have a separate simulator function now because couting misses might be problematic? MIGHT CHANGE IN FUTURE
+        // virtual void simulator(char type, ull addr) = 0;
         virtual void bring_from_memory(char type, ull addr) = 0;
         virtual void bring_from_llc(char type, ull addr) = 0;
+
+        void simulator(char type, ull addr) {
+            auto [setL2, tagL2] = decode_address(addr, L2_SET_BITS, LOG_L2_SETS);
+            auto [setL3, tagL3] = decode_address(addr, L3_SET_BITS, LOG_L3_SETS);
+            int l2_ind = check_in_cache(setL2, tagL2, L2, NUM_L2_TAGS);
+            int l3_ind = check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS);
+            if(l2_ind != -1) {
+                l2_hits++;
+                update_priority(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+            }
+            else if(l2_ind == -1 && l3_ind != -1){
+                // hits in llc
+                // no idea how this is going to be implemented, signature can change.
+                // idea is to update miss and hit counters inside bring_from_llc function. CAN change, if we want to count conflict and cap misses.
+                bring_from_llc(type, addr);
+            }
+            else{
+                // bring shit from memory.
+                bring_from_memory(type, addr);
+            }
+        }
 
     private:
 
@@ -75,10 +97,11 @@ class Cache{
             update_priority(st, tag, Lx, timeBlockAddedLx, maxTags);
         }
 };
-//TODO: write simulate, bring from LLC, bring from memory for each of these caches.
-class NINECache : public Cache {};
-class IncCache : public Cache {};
+//TODO: write bring from LLC, bring from memory for each of these caches.
 class ExCache : public Cache {};
+class IncCache : public Cache {};
+class NINECache : public Cache {};
+
 int main(int argc, char *argv[]){
     using std::cout;
     using std::endl;
@@ -116,20 +139,3 @@ int main(int argc, char *argv[]){
     }
     return 0;
 }
-        // void simulator(char type, ull addr){
-        //     auto [setL2, tagL2] = decode_address(addr, L2_SET_BITS, LOG_L2_SETS);
-        //     auto [setL3, tagL3] = decode_address(addr, L3_SET_BITS, LOG_L3_SETS);
-
-        //     if(check_in_cache(setL2, tagL2, L2, NUM_L2_TAGS)){
-        //         l2_hits++;
-        //         update_priority(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
-        //     }
-        //     else {
-        //         l2_misses++;
-        //         if(check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS)){
-        //             l3_hits++;
-        //             update_priority(setL3, tagL3, L3, timeBlockAddedL3, NUM_L3_TAGS);
-        //             copy_from_L3_and_replace_L2(setL2, tagL2, setL3, tagL3);
-        //         }
-        //     }
-        // }

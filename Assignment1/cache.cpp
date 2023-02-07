@@ -25,56 +25,37 @@ class Cache{
         // have a separate simulator function now because couting misses might be problematic? MIGHT CHANGE IN FUTURE
         // virtual void simulator(char type, ull addr) = 0;
         virtual void bring_from_memory(char type, ull addr) = 0;
-        virtual void bring_from_llc(char type, ull addr) = 0;
+        virtual void bring_from_llc(char type, ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0; // have put set and tag in arguments; could also deduce from addr (redundant)
 
         void simulator(char type, ull addr) {
+            if((int)type == 0) { return ; }
             auto [setL2, tagL2] = decode_address(addr, L2_SET_BITS, LOG_L2_SETS);
             auto [setL3, tagL3] = decode_address(addr, L3_SET_BITS, LOG_L3_SETS);
-            int l2_ind = check_in_cache(setL2, tagL2, L2, NUM_L2_TAGS);
-            int l3_ind = check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS);
-            if(l2_ind != -1) {
+            int l2_ind, l3_ind;
+            if((l2_ind = check_in_cache(setL2, tagL2, L2, NUM_L2_TAGS)) != -1) {
                 l2_hits++;
                 update_priority(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
             }
-            else if(l2_ind == -1 && l3_ind != -1){
+            else if((l3_ind = check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS)) != -1){
                 // hits in llc
                 // no idea how this is going to be implemented, signature can change.
                 // idea is to update miss and hit counters inside bring_from_llc function. CAN change, if we want to count conflict and cap misses.
-                bring_from_llc(type, addr);
+                l2_misses++;
+                l3_hits++;
+                bring_from_llc(type, addr, setL2, tagL2, setL3, tagL3);
             }
             else{
                 // bring shit from memory.
+                l2_misses++;
+                l3_misses++;
                 bring_from_memory(type, addr);
             }
         }
-
-    private:
-
+    protected:
         unsigned long l2_hits, l2_misses, l3_hits, l3_misses;
         std::vector <std::vector<blk>> L2, L3; // tag -> ull, active? -> bool
         std::vector <std::vector<ull>> timeBlockAddedL2, timeBlockAddedL3; // -> for eviction.
-
-        // returns tag index in current set if found & is valid. Else returns -1
-        int check_in_cache(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
-            for(int i = 0; i < maxTags; i++){
-                if(Lx[st][i].second == true and Lx[st][i].first == tag){
-                    return i;
-                }
-            }
-            return -1;
-        }
-        // updates LRU list of times.
-        void update_priority(ull st, ull tag, std::vector <std::vector<blk>> &Lx, std::vector <std::vector<ull>> &timeBlockAddedLx, int maxTags){
-            auto maxValue = *(std::max_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()));
-            int tag_index = check_in_cache(st, tag, Lx, maxTags);
-            if(tag_index != -1) timeBlockAddedLx[st][tag_index] = maxValue + 1;
-        }
-        //helper function for decoding addresses
-        std::pair<ull, ull> decode_address(ull addr, ull set_bits, int log_set_size){
-            ull st = (addr >> LOG_BLOCK_SIZE) & set_bits;
-            ull tag = (addr >> (LOG_BLOCK_SIZE + log_set_size));
-            return std::pair<ull, ull>(st, tag);
-        }
+        
         // evicts a block by simply zeroing out its valid bit, given a tag and set.
         void evict(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
             int tag_index = check_in_cache(st, tag, Lx, maxTags);
@@ -96,11 +77,46 @@ class Cache{
             Lx[st][replaceIndex] = blk(tag, true);
             update_priority(st, tag, Lx, timeBlockAddedLx, maxTags);
         }
+    private:
+        // returns tag index in current set if found & is valid. Else returns -1
+        int check_in_cache(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
+            for(int i = 0; i < maxTags; i++){
+                if(Lx[st][i].second == true and Lx[st][i].first == tag){
+                    return i;
+                }
+            }
+            return -1;
+        }
+        // updates LRU list of times.
+        void update_priority(ull st, ull tag, std::vector <std::vector<blk>> &Lx, std::vector <std::vector<ull>> &timeBlockAddedLx, int maxTags){
+            auto maxValue = *(std::max_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()));
+            int tag_index = check_in_cache(st, tag, Lx, maxTags);
+            if(tag_index != -1) timeBlockAddedLx[st][tag_index] = maxValue + 1;
+        }
+        //helper function for decoding addresses
+        std::pair<ull, ull> decode_address(ull addr, ull set_bits, int log_set_size){
+            ull st = (addr >> LOG_BLOCK_SIZE) & set_bits;
+            ull tag = (addr >> (LOG_BLOCK_SIZE + log_set_size));
+            return std::pair<ull, ull>(st, tag);
+        }
 };
 //TODO: write bring from LLC, bring from memory for each of these caches.
-class ExCache : public Cache {};
-class IncCache : public Cache {};
-class NINECache : public Cache {};
+class ExCache : public Cache {
+    private:
+        void bring_from_llc(char type, ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            evict(setL3, tagL3, L3, NUM_L3_TAGS); // evicts from L3
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // replaces the block in L2
+        }
+};
+class IncCache : public Cache {
+    private:
+        void bring_from_llc(char type, ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+        }
+};
+class NINECache : public Cache {
+    
+};
 
 int main(int argc, char *argv[]){
     using std::cout;
@@ -131,7 +147,7 @@ int main(int argc, char *argv[]){
             std::cout << (int)i_or_d << " " << (int)type << " " << addr << " " << pc << std::endl;
             // Process the entry
             // cache.simulator(type, addr);
-            return 0;
+            // return 0;
 
         }
         fclose(fp);

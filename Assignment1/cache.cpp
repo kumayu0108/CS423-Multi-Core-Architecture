@@ -1,5 +1,7 @@
 #include <bits/stdc++.h>
 
+//TODO: Separate into header file
+
 #define ull unsigned long long
 //defines a cache block. contains a tag and a valid bit.
 #define blk std::pair<ull, bool>
@@ -24,8 +26,8 @@ class Cache{
 
         // have a separate simulator function now because couting misses might be problematic? MIGHT CHANGE IN FUTURE
         // virtual void simulator(char type, ull addr) = 0;
-        virtual void bring_from_memory(char type, ull addr) = 0;
-        virtual void bring_from_llc(char type, ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0; // have put set and tag in arguments; could also deduce from addr (redundant)
+        virtual void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
+        virtual void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0; // have put set and tag in arguments; could also deduce from addr (redundant)
 
         void simulator(char type, ull addr) {
             if((int)type == 0) { return ; }
@@ -42,13 +44,13 @@ class Cache{
                 // idea is to update miss and hit counters inside bring_from_llc function. CAN change, if we want to count conflict and cap misses.
                 l2_misses++;
                 l3_hits++;
-                bring_from_llc(type, addr, setL2, tagL2, setL3, tagL3);
+                bring_from_llc(addr, setL2, tagL2, setL3, tagL3);
             }
             else{
                 // bring shit from memory.
                 l2_misses++;
                 l3_misses++;
-                bring_from_memory(type, addr);
+                bring_from_memory(addr, setL2, tagL2, setL3, tagL3);
             }
         }
     protected:
@@ -62,9 +64,10 @@ class Cache{
             if(tag_index != -1) Lx[st][tag_index].second = false;
         }
         // given a certain set, it uses LRU policy to replace cache block.
-        void replace(ull st, ull tag, std::vector <std::vector<blk>> &Lx, std::vector <std::vector<ull>> &timeBlockAddedLx, int maxTags){
+        blk replace(ull st, ull tag, std::vector <std::vector<blk>> &Lx, std::vector <std::vector<ull>> &timeBlockAddedLx, int maxTags){
             //find first invalid block, fill it, return.
             int replaceIndex = -1;
+            blk retBlock = {0, false};
             for(int i = 0; i < maxTags; i++){
                 if(!Lx[st][i].second) // not valid;
                 {
@@ -73,11 +76,21 @@ class Cache{
                 }
             }
             // else calculate index of minimum timestamp for LRU replacement.
-            if(replaceIndex == -1) replaceIndex = std::min_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()) - timeBlockAddedLx[st].begin();
+            if(replaceIndex == -1) {
+                replaceIndex = std::min_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()) - timeBlockAddedLx[st].begin();
+                retBlock.second = true;
+            }
+            retBlock.first = get_addr(st, Lx[st][replaceIndex].first, maxTags);
             Lx[st][replaceIndex] = blk(tag, true);
             update_priority(st, tag, Lx, timeBlockAddedLx, maxTags);
+            return retBlock;
         }
-    private:
+        //helper function for decoding addresses
+        std::pair<ull, ull> decode_address(ull addr, ull set_bits, int log_set_size){
+            ull st = (addr >> LOG_BLOCK_SIZE) & set_bits;
+            ull tag = (addr >> (LOG_BLOCK_SIZE + log_set_size));
+            return std::pair<ull, ull>(st, tag);
+        }
         // returns tag index in current set if found & is valid. Else returns -1
         int check_in_cache(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
             for(int i = 0; i < maxTags; i++){
@@ -87,35 +100,59 @@ class Cache{
             }
             return -1;
         }
+    private:
         // updates LRU list of times.
         void update_priority(ull st, ull tag, std::vector <std::vector<blk>> &Lx, std::vector <std::vector<ull>> &timeBlockAddedLx, int maxTags){
             auto maxValue = *(std::max_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()));
             int tag_index = check_in_cache(st, tag, Lx, maxTags);
             if(tag_index != -1) timeBlockAddedLx[st][tag_index] = maxValue + 1;
         }
-        //helper function for decoding addresses
-        std::pair<ull, ull> decode_address(ull addr, ull set_bits, int log_set_size){
-            ull st = (addr >> LOG_BLOCK_SIZE) & set_bits;
-            ull tag = (addr >> (LOG_BLOCK_SIZE + log_set_size));
-            return std::pair<ull, ull>(st, tag);
+        //helper function to get address from set and tag bits
+        ull get_addr(ull st, ull tag, int maxTags){
+            if(maxTags == NUM_L2_TAGS){
+                return ((tag << (LOG_BLOCK_SIZE + LOG_L2_SETS)) | (st << LOG_BLOCK_SIZE));
+            }
+            else {
+                return ((tag << (LOG_BLOCK_SIZE + LOG_L3_SETS)) | (st << LOG_BLOCK_SIZE));
+            }
         }
 };
-//TODO: write bring from LLC, bring from memory for each of these caches.
+//TODO: write bring from memory for each of these caches.
 class ExCache : public Cache {
     private:
-        void bring_from_llc(char type, ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             evict(setL3, tagL3, L3, NUM_L3_TAGS); // evicts from L3
-            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // replaces the block in L2
+            blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // replaces the block in L2
+            if(!replacedBlk.second){ return ; }
+            auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS);
+            replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS);
+        }
+        void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+
         }
 };
 class IncCache : public Cache {
     private:
-        void bring_from_llc(char type, ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+        }
+        void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+
         }
 };
 class NINECache : public Cache {
-    
+    private:
+        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+            //Ayush: Should I transfer replaced block from L2 to L3 in NINE?
+            if(!replacedBlk.second) { return ; }
+            auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS);
+            if(check_in_cache(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; }
+            replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS);
+        }
+        void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+
+        }
 };
 
 int main(int argc, char *argv[]){

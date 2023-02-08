@@ -24,13 +24,11 @@ class Cache{
             timeBlockAddedL3(L3_SETS, std::vector <ull> (NUM_L3_TAGS, 0)),
             l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0) {}
 
-        // have a separate simulator function now because couting misses might be problematic? MIGHT CHANGE IN FUTURE
-        // virtual void simulator(char type, ull addr) = 0;
         virtual void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
-        virtual void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0; // have put set and tag in arguments; could also deduce from addr (redundant)
+        virtual void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
 
         void simulator(char type, ull addr) {
-            if((int)type == 0) { return ; }
+            if(static_cast<int>(type) == 0) { return; } // if write perm miss, treat as hit, ignore.
             auto [setL2, tagL2] = decode_address(addr, L2_SET_BITS, LOG_L2_SETS);
             auto [setL3, tagL3] = decode_address(addr, L3_SET_BITS, LOG_L3_SETS);
             int l2_ind, l3_ind;
@@ -38,32 +36,23 @@ class Cache{
                 l2_hits++;
                 update_priority(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
             }
-            else if((l3_ind = check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS)) != -1){
-                // hits in llc
-                // no idea how this is going to be implemented, signature can change.
-                // idea is to update miss and hit counters inside bring_from_llc function. CAN change, if we want to count conflict and cap misses.
-                l2_misses++;
-                l3_hits++;
+            else if((l3_ind = check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS)) != -1)
                 bring_from_llc(addr, setL2, tagL2, setL3, tagL3);
-            }
-            else{
-                // bring shit from memory.
-                l2_misses++;
-                l3_misses++;
+            else
                 bring_from_memory(addr, setL2, tagL2, setL3, tagL3);
-            }
         }
     protected:
         unsigned long l2_hits, l2_misses, l3_hits, l3_misses;
         std::vector <std::vector<blk>> L2, L3; // tag -> ull, active? -> bool
         std::vector <std::vector<ull>> timeBlockAddedL2, timeBlockAddedL3; // -> for eviction.
-        
+
         // evicts a block by simply zeroing out its valid bit, given a tag and set.
         void evict(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
             int tag_index = check_in_cache(st, tag, Lx, maxTags);
             if(tag_index != -1) Lx[st][tag_index].second = false;
         }
         // given a certain set, it uses LRU policy to replace cache block.
+        //returns address evicted, along with a bool denoting if it actually existed or if it was an empty slot.
         blk replace(ull st, ull tag, std::vector <std::vector<blk>> &Lx, std::vector <std::vector<ull>> &timeBlockAddedLx, int maxTags){
             //find first invalid block, fill it, return.
             int replaceIndex = -1;
@@ -76,10 +65,12 @@ class Cache{
                 }
             }
             // else calculate index of minimum timestamp for LRU replacement.
+            // all blocks are valid, so we're actually evicting an existing block.
             if(replaceIndex == -1) {
                 replaceIndex = std::min_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()) - timeBlockAddedLx[st].begin();
                 retBlock.second = true;
             }
+            //get address evicted.
             retBlock.first = get_addr(st, Lx[st][replaceIndex].first, maxTags);
             Lx[st][replaceIndex] = blk(tag, true);
             update_priority(st, tag, Lx, timeBlockAddedLx, maxTags);
@@ -117,41 +108,50 @@ class Cache{
             }
         }
 };
-//TODO: write bring from memory for each of these caches.
+
 class ExCache : public Cache {
     private:
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            l2_misses++;
+            l3_hits++;
             evict(setL3, tagL3, L3, NUM_L3_TAGS); // evicts from L3
             blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // replaces the block in L2
-            if(!replacedBlk.second){ return ; }
+            if(!replacedBlk.second){ return; } // if evicted block was invalid, simply return.
+            // if evicted block was valid, allocate it in L3. replace block in L3 cache.
             auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS);
             replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
-
+            l2_misses++;
+            l3_misses++;
         }
 };
 class IncCache : public Cache {
     private:
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            l2_misses++;
+            l3_hits++;
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
-
+            l2_misses++;
+            l3_misses++;
         }
 };
 class NINECache : public Cache {
     private:
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
-            blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
-            //Ayush: Should I transfer replaced block from L2 to L3 in NINE?
-            if(!replacedBlk.second) { return ; }
-            auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS);
-            if(check_in_cache(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; }
-            replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS);
+            l2_misses++;
+            l3_hits++;
+            blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
+            if(!replacedBlk.second) { return; } // if invalid block evicted, just return
+            auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS); // else evict from L3
+            if(check_in_cache(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; } // if already exists in L3, dont do anything.
+            replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // else replace block in L3
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
-
+            l2_misses++;
+            l3_misses++;
         }
 };
 

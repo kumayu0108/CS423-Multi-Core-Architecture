@@ -113,10 +113,10 @@ class ExCache : public Cache {
     private:
         // evicts a block from L2, puts in a block with setL2 set and tagL2 tag.
         void evict_replace_l2(ull setL2, ull tagL2){
-            blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // replaces the block in L2
-            if(!replacedBlk.second){ return; } // if evicted block was invalid, simply return.
+            auto [replacedAddrL2, valid] = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // replaces the block in L2
+            if(!valid){ return; } // if evicted block was invalid, simply return.
             // if evicted block was valid, allocate it in L3. replace block in L3 cache.
-            auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS);
+            auto [replacedSetL3, replacedTagL3] = decode_address(replacedAddrL2, L3_SET_BITS, LOG_L3_SETS);
             replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS);
         }
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
@@ -141,22 +141,31 @@ class IncCache : public Cache {
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_misses++;
+            auto [replacedAddrL3, validL3] = replace(setL3, tagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // evict from L3 first.
+            auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
+            evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
         }
 };
 class NINECache : public Cache {
     private:
+        void evict_replace_l2(ull setL2, ull tagL2){
+            auto [replacedAddrL2, valid] = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
+            if(!valid) { return; } // if invalid block evicted, just return
+            auto [replacedSetL3, replacedTagL3] = decode_address(replacedAddrL2, L3_SET_BITS, LOG_L3_SETS); // else get set and tag to try wb in L3.
+            if(check_in_cache(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; } // if already exists in L3, dont do anything.
+            replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // else replace block in L3
+        }
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_hits++;
-            blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
-            if(!replacedBlk.second) { return; } // if invalid block evicted, just return
-            auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS); // else evict from L3
-            if(check_in_cache(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; } // if already exists in L3, dont do anything.
-            replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // else replace block in L3
+            evict_replace_l2(setL2, tagL2);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_misses++;
+            replace(setL3, tagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // evict from L3 first.
+            evict_replace_l2(setL2, tagL2); // then evict from L2;
         }
 };
 

@@ -111,19 +111,24 @@ class Cache{
 
 class ExCache : public Cache {
     private:
-        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
-            l2_misses++;
-            l3_hits++;
-            evict(setL3, tagL3, L3, NUM_L3_TAGS); // evicts from L3
+        // evicts a block from L2, puts in a block with setL2 set and tagL2 tag.
+        void evict_replace_l2(ull setL2, ull tagL2){
             blk replacedBlk = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // replaces the block in L2
             if(!replacedBlk.second){ return; } // if evicted block was invalid, simply return.
             // if evicted block was valid, allocate it in L3. replace block in L3 cache.
             auto [replacedSetL3, replacedTagL3] = decode_address(replacedBlk.first, L3_SET_BITS, LOG_L3_SETS);
             replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS);
         }
+        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            l2_misses++;
+            l3_hits++;
+            evict(setL3, tagL3, L3, NUM_L3_TAGS); // evicts from L3
+            evict_replace_l2(setL2, tagL2);
+        }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_misses++;
+            evict_replace_l2(setL2, tagL2);
         }
 };
 class IncCache : public Cache {

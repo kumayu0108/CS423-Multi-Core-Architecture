@@ -1,6 +1,7 @@
 .vscode/
 
 traces/
+bin/
 
 *.zip
 *.exe

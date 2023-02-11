@@ -17,26 +17,35 @@ constexpr ull L3_SET_BITS = 0x7ff;
 
 class Cache{
     public:
-        Cache():
-            L2(L2_SETS, std::vector<blk> (NUM_L2_TAGS, {0, false})),
-            timeBlockAddedL2(L2_SETS, std::vector <ull> (NUM_L2_TAGS, 0)),
-            L3(L3_SETS, std::vector<blk> (NUM_L3_TAGS, {0, false})),
-            timeBlockAddedL3(L3_SETS, std::vector <ull> (NUM_L3_TAGS, 0)),
-            l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0) {}
+        enum replace_pol {LRU, Belady};
+        Cache(replace_pol pol):
+            l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0) {
+                if(pol == replace_pol::LRU){
+                    L2.resize(L2_SETS, std::vector<blk> (NUM_L2_TAGS, {0, false}));
+                    timeBlockAddedL2.resize(L2_SETS, std::vector <ull> (NUM_L2_TAGS, 0));
+                    L3.resize(L3_SETS, std::vector<blk> (NUM_L3_TAGS, {0, false}));
+                    timeBlockAddedL3.resize(L3_SETS, std::vector <ull> (NUM_L3_TAGS, 0));
+                    check_in_cache = &Cache::check_in_cache_lru;
+                }
+                else {
+                    check_in_cache = &Cache::check_in_cache_belady;
+                }
+            }
 
         virtual void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
         virtual void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
+
 
         void simulator(char type, ull addr) {
             if(static_cast<int>(type) == 0) { return; } // if write perm miss, treat as hit, ignore.
             auto [setL2, tagL2] = decode_address(addr, L2_SET_BITS, LOG_L2_SETS);
             auto [setL3, tagL3] = decode_address(addr, L3_SET_BITS, LOG_L3_SETS);
             int l2_ind, l3_ind;
-            if((l2_ind = check_in_cache(setL2, tagL2, L2, NUM_L2_TAGS)) != -1) {
+            if((l2_ind = (this->*(this->check_in_cache))(setL2, tagL2, L2, NUM_L2_TAGS)) != -1) {
                 l2_hits++;
                 update_priority(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
             }
-            else if((l3_ind = check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS)) != -1)
+            else if((l3_ind = (this->*(this->check_in_cache))(setL3, tagL3, L3, NUM_L3_TAGS)) != -1)
                 bring_from_llc(addr, setL2, tagL2, setL3, tagL3);
             else
                 bring_from_memory(addr, setL2, tagL2, setL3, tagL3);
@@ -45,10 +54,11 @@ class Cache{
         unsigned long l2_hits, l2_misses, l3_hits, l3_misses;
         std::vector <std::vector<blk>> L2, L3; // tag -> ull, active? -> bool
         std::vector <std::vector<ull>> timeBlockAddedL2, timeBlockAddedL3; // -> for eviction.
+        int (Cache::*check_in_cache)(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags) = NULL;
 
         // evicts a block by simply zeroing out its valid bit, given a tag and set.
         void evict(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
-            int tag_index = check_in_cache(st, tag, Lx, maxTags);
+            int tag_index = (this->*(this->check_in_cache))(st, tag, Lx, maxTags);
             if(tag_index != -1) Lx[st][tag_index].second = false;
         }
         // given a certain set, it uses LRU policy to replace cache block.
@@ -83,7 +93,7 @@ class Cache{
             return std::pair<ull, ull>(st, tag);
         }
         // returns tag index in current set if found & is valid. Else returns -1
-        int check_in_cache(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
+        int check_in_cache_lru(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
             for(int i = 0; i < maxTags; i++){
                 if(Lx[st][i].second == true and Lx[st][i].first == tag){
                     return i;
@@ -91,11 +101,15 @@ class Cache{
             }
             return -1;
         }
+        int check_in_cache_belady(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
+            
+            return -1;
+        }
     private:
         // updates LRU list of times.
         void update_priority(ull st, ull tag, std::vector <std::vector<blk>> &Lx, std::vector <std::vector<ull>> &timeBlockAddedLx, int maxTags){
             auto maxValue = *(std::max_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()));
-            int tag_index = check_in_cache(st, tag, Lx, maxTags);
+            int tag_index = (this->*(this->check_in_cache))(st, tag, Lx, maxTags);
             if(tag_index != -1) timeBlockAddedLx[st][tag_index] = maxValue + 1;
         }
         //helper function to get address from set and tag bits
@@ -130,6 +144,8 @@ class ExCache : public Cache {
             l3_misses++;
             evict_replace_l2(setL2, tagL2);
         }
+    public:
+        ExCache (replace_pol pol) : Cache(pol) {}
 };
 class IncCache : public Cache {
     private:
@@ -146,6 +162,8 @@ class IncCache : public Cache {
             evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
         }
+    public:
+        IncCache (replace_pol pol) : Cache(pol) {}
 };
 class NINECache : public Cache {
     private:
@@ -153,7 +171,7 @@ class NINECache : public Cache {
             auto [replacedAddrL2, valid] = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
             if(!valid) { return; } // if invalid block evicted, just return
             auto [replacedSetL3, replacedTagL3] = decode_address(replacedAddrL2, L3_SET_BITS, LOG_L3_SETS); // else get set and tag to try wb in L3.
-            if(check_in_cache(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; } // if already exists in L3, dont do anything.
+            if((this->*(this->check_in_cache))(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; } // if already exists in L3, dont do anything.
             replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // else replace block in L3
         }
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
@@ -167,6 +185,20 @@ class NINECache : public Cache {
             replace(setL3, tagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // evict from L3 first.
             evict_replace_l2(setL2, tagL2); // then evict from L2;
         }
+    public:
+        NINECache (replace_pol pol) : Cache(pol) {}
+};
+
+class BeladyCache : public Cache {
+    private:
+        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+
+        }
+        void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+        
+        }
+    public:
+        BeladyCache (replace_pol pol) : Cache(pol) {}
 };
 
 int main(int argc, char *argv[]){
@@ -176,7 +208,10 @@ int main(int argc, char *argv[]){
     using std::pair;
 
     // Cache cache;
-
+    ExCache excache(Cache::replace_pol::LRU);
+    IncCache incache(Cache::replace_pol::LRU);
+    NINECache ninecache(Cache::replace_pol::LRU);
+    BeladyCache beladycache(Cache::replace_pol::Belady);
     FILE *fp;
     char input_name[256];
     int numtraces = atoi(argv[2]);
@@ -195,11 +230,10 @@ int main(int argc, char *argv[]){
             fread(&type, sizeof(char), 1, fp);
             fread(&addr, sizeof(ull), 1, fp);
             fread(&pc, sizeof(unsigned), 1, fp);
-            std::cout << (int)i_or_d << " " << (int)type << " " << addr << " " << pc << std::endl;
             // Process the entry
-            // cache.simulator(type, addr);
-            // return 0;
-
+            excache.simulator(type, addr);
+            incache.simulator(type, addr);
+            ninecache.simulator(type, addr);
         }
         fclose(fp);
         printf("Done reading file %d!\n", k);

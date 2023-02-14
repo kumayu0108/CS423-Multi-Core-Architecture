@@ -17,6 +17,7 @@ constexpr ull L3_SET_BITS = 0x7ff;
 
 class Cache{
     public:
+        unsigned long l2_hits, l2_misses, l3_hits, l3_misses;
         Cache():
             L2(L2_SETS, std::vector<blk> (NUM_L2_TAGS, {0, false})),
             timeBlockAddedL2(L2_SETS, std::vector <ull> (NUM_L2_TAGS, 0)),
@@ -42,7 +43,6 @@ class Cache{
                 bring_from_memory(addr, setL2, tagL2, setL3, tagL3);
         }
     protected:
-        unsigned long l2_hits, l2_misses, l3_hits, l3_misses;
         std::vector <std::vector<blk>> L2, L3; // tag -> ull, active? -> bool
         std::vector <std::vector<ull>> timeBlockAddedL2, timeBlockAddedL3; // -> for eviction.
 
@@ -184,6 +184,9 @@ int main(int argc, char *argv[]){
     char type;
     ull addr;
     unsigned pc;
+    ExCache excache;
+    IncCache incache;
+    NINECache ninecache;
     for (int k=0; k<numtraces; k++) {
         sprintf(input_name, "traces/%s_%d", argv[1], k);
         fp = fopen(input_name, "rb");
@@ -195,14 +198,18 @@ int main(int argc, char *argv[]){
             fread(&type, sizeof(char), 1, fp);
             fread(&addr, sizeof(ull), 1, fp);
             fread(&pc, sizeof(unsigned), 1, fp);
-            std::cout << (int)i_or_d << " " << (int)type << " " << addr << " " << pc << std::endl;
+            // std::cout << (int)i_or_d << " " << (int)type << " " << addr << " " << pc << std::endl;
             // Process the entry
-            // cache.simulator(type, addr);
-            // return 0;
-
+            excache.simulator(type, addr);
+            incache.simulator(type, addr);
+            ninecache.simulator(type, addr);
         }
         fclose(fp);
         printf("Done reading file %d!\n", k);
     }
+    cout << "l2_hits:" << excache.l2_hits << " l2_misses:" << excache.l2_misses << " l3_hits:" << excache.l3_hits << " l3_misses:" << excache.l3_misses << " l2_total:" << excache.l2_hits + excache.l2_misses << " l3_total:" << excache.l3_hits + excache.l3_misses << endl;
+    cout << "l2_hits:" << incache.l2_hits << " l2_misses:" << incache.l2_misses << " l3_hits:" << incache.l3_hits << " l3_misses:" << incache.l3_misses << " l2_total:" << incache.l2_hits + incache.l2_misses << " l3_total:" << incache.l3_hits + incache.l3_misses << endl;
+    cout << "l2_hits:" << ninecache.l2_hits << " l2_misses:" << ninecache.l2_misses << " l3_hits:" << ninecache.l3_hits << " l3_misses:" << ninecache.l3_misses << " l2_total:" << ninecache.l2_hits + ninecache.l2_misses << " l3_total:" << ninecache.l3_hits + ninecache.l3_misses << endl;
+
     return 0;
 }

@@ -32,12 +32,12 @@ class Cache{
     public:
         enum replace_pol {LRU, Belady};
         Cache(replace_pol pol):
-            l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0), pol(pol) {
+            l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0), time(0), pol(pol) {
 
             }
 
-        virtual void bring_from_memory(ull addr, ull tagL2) = 0;
-        virtual void bring_from_llc(ull addr, ull tagL2) = 0;
+        virtual void bring_from_memory(ull addr, ull tag) = 0;
+        virtual void bring_from_llc(ull addr, ull tag) = 0;
 
         void simulator(char type, ull addr) {
             if(static_cast<int>(type) == 0) { return; } // if write perm miss, treat as hit, ignore.
@@ -61,9 +61,8 @@ class Cache{
             time++;
         }
     protected:
-        unsigned long l2_hits, l2_misses, l3_hits, l3_misses;
+        unsigned long l2_hits, l2_misses, l3_hits, l3_misses, time;
         replace_pol pol;
-        ull time = 0;
         std::unordered_map <ull, ull> L2, L3; // tag -> time map
         std::set <std::pair<ull, ull>> timeBlockAddedL2, timeBlockAddedL3; // (time, tag) -> for eviction.
         std::set <std::pair<ull, ull>, cmp > timeForNextAccessL2, timeForNextAccessL3; // storing {time for next acess, tag} for eviction
@@ -126,16 +125,69 @@ class Cache{
 
 class LRUCache : public Cache {
     private:
-
+        void bring_from_llc(ull addr, ull tag){
+            // increase respective counters
+            l2_misses++;
+            l3_hits++;
+            replace_lru(tag, L2, timeBlockAddedL2, L2_ASSOC);   // replace block in L2 no need to replace again in L3 as it has the block
+        }
+        void bring_from_memory(ull addr, ull tag){
+            // increase respective counters
+            l2_misses++;
+            l3_misses++;
+            auto [replacedTagL3, validL3] = replace_lru(tag, L3, timeBlockAddedL3, L3_ASSOC);   // replace block in L3
+            if(validL3){
+                evict_lru(replacedTagL3, L2, timeBlockAddedL2); // evict replaced L3 block from L2.
+            }
+            replace_lru(tag, L2, timeBlockAddedL2, L2_ASSOC);   // replace block in L2
+        }
     public:
         LRUCache() : Cache(replace_pol::LRU) {}
 };
 
 class BeladyCache : public Cache {
     private:
-
+        void bring_from_llc(ull addr, ull tag){
+            l2_misses++;
+            l3_hits++;
+            replace_lru(tag, L2, timeBlockAddedL2, L2_ASSOC);   // replace block in L2 no need to replace again in L3 as it has the block
+        }
+        void bring_from_memory(ull addr, ull tag){
+            // increase respective counters
+            l2_misses++;
+            l3_misses++;
+            auto [replacedTagL3, validL3] = replace_lru(tag, L3, timeBlockAddedL3, L3_ASSOC);   // replace block in L3
+            if(validL3){
+                evict_lru(replacedTagL3, L2, timeBlockAddedL2); // evict replaced L3 block from L2.
+            }
+            replace_lru(tag, L2, timeBlockAddedL2, L2_ASSOC);   // replace block in L2
+        }
     public:
-        BeladyCache() : Cache(replace_pol::Belady) {}
+        BeladyCache(char *argv[]) : Cache(replace_pol::Belady) {
+            FILE *fp;
+            char input_name[256];
+            int numtraces = atoi(argv[2]);
+            char i_or_d;
+            char type;
+            ull addr;
+            unsigned pc;
+            unsigned int time = 0;
+            for (int k=0; k<numtraces; k++) {
+                sprintf(input_name, "traces/%s_%d", argv[1], k);
+                fp = fopen(input_name, "rb");
+                std::cout << input_name << "\n";
+                assert(fp != NULL);
+                while (!feof(fp)) {
+                    fread(&i_or_d, sizeof(char), 1, fp);
+                    fread(&type, sizeof(char), 1, fp);
+                    fread(&addr, sizeof(ull), 1, fp);
+                    fread(&pc, sizeof(unsigned), 1, fp);
+                    futureAccesses[decode_address(addr)].insert(time);
+                    time++;
+                }
+                fclose(fp);
+            }
+        }
 };
 
 
@@ -145,7 +197,8 @@ int main(int argc, char *argv[]){
     using std::vector;
     using std::pair;
 
-    // Cache cache;
+    LRUCache lrucache;
+    BeladyCache belcache(argv);
 
     FILE *fp;
     char input_name[256];
@@ -165,11 +218,9 @@ int main(int argc, char *argv[]){
             fread(&type, sizeof(char), 1, fp);
             fread(&addr, sizeof(ull), 1, fp);
             fread(&pc, sizeof(unsigned), 1, fp);
-            std::cout << (int)i_or_d << " " << (int)type << " " << addr << " " << pc << std::endl;
             // Process the entry
-            // cache.simulator(type, addr);
-            // return 0;
-
+            lrucache.simulator(type, addr);
+            belcache.simulator(type, addr);
         }
         fclose(fp);
         printf("Done reading file %d!\n", k);

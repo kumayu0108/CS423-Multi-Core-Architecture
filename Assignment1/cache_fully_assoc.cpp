@@ -25,9 +25,14 @@ class Cache{
             timeBlockAddedLx.insert({time, tag});
         }
         void update_priority_belady(ull tag, std::unordered_map <ull, ull> &Lx, std::set <std::pair<ull, ull>, cmp > timeForNextAccessLx){
-            timeForNextAccessLx.erase({time, tag});
-            timeForNextAccessLx.insert({*futureAccesses[tag].begin(), tag});
-            Lx[tag] = time;
+            // timeForNextAccessLx.erase({time, tag});
+            // timeForNextAccessLx.insert({*futureAccesses[tag].begin(), tag});
+            Lx[tag] = *futureAccesses[tag].begin();
+            auto it = timeForNextAccessL3.find({L3[tag], tag});
+            assert(L3[tag] == time);
+            timeForNextAccessL3.erase(it);
+            timeForNextAccessL3.insert({*futureAccesses[tag].begin(), tag});
+            L3[tag] = *futureAccesses[tag].begin();
         }
     public:
         enum replace_pol {LRU, Belady};
@@ -78,7 +83,7 @@ class Cache{
         }
         // given a certain set, it uses LRU policy to replace cache block and updates priority
         // returns tag evicted along with a bool denoting if it actually existed or if it was an empty slot.
-        blk replace_lru(ull tag, std::unordered_map <ull, ull> &Lx, std::set <std::pair<ull, ull>> &timeBlockAddedLx, ull maxTags){
+        blk replace_lru(ull tag, std::unordered_map <ull, ull> &Lx, std::set <std::pair<ull, ull>> &timeBlockAddedLx, ull maxTags, bool updateL3MetaData = false){
             //find first invalid block, fill it, return.
             blk retBlock = {0, false};
             if(Lx.size() == maxTags) {
@@ -91,6 +96,13 @@ class Cache{
             }
             Lx[tag] = time;
             timeBlockAddedLx.insert({time, tag});
+            if(updateL3MetaData){
+                auto it = timeForNextAccessL3.find({L3[tag], tag});
+                assert(L3[tag] == time);
+                timeForNextAccessL3.erase(it);
+                timeForNextAccessL3.insert({*futureAccesses[tag].begin(), tag});
+                L3[tag] = *futureAccesses[tag].begin();
+            }
             return retBlock;
         }
         // given a certain set, it uses BELADY policy to replace cache block and updates priority
@@ -106,7 +118,7 @@ class Cache{
                 retBlock.first = replacedTag;
                 Lx.erase(replacedTag);
             }
-            Lx[tag] = time;
+            Lx[tag] = *futureAccesses[tag].begin();
             timeForNextAccessLx.insert({*futureAccesses[tag].begin(), tag});
             return retBlock;
         }
@@ -150,13 +162,13 @@ class BeladyCache : public Cache {
         void bring_from_llc(ull addr, ull tag){
             l2_misses++;
             l3_hits++;
-            replace_lru(tag, L2, timeBlockAddedL2, L2_ASSOC);   // replace block in L2 no need to replace again in L3 as it has the block
+            replace_lru(tag, L2, timeBlockAddedL2, L2_ASSOC, true);   // replace block in L2 no need to replace again in L3 as it has the block
         }
         void bring_from_memory(ull addr, ull tag){
             // increase respective counters
             l2_misses++;
             l3_misses++;
-            auto [replacedTagL3, validL3] = replace_lru(tag, L3, timeBlockAddedL3, L3_ASSOC);   // replace block in L3
+            auto [replacedTagL3, validL3] = replace_belady(tag, L3, timeForNextAccessL3, L3_ASSOC);   // replace block in L3
             if(validL3){
                 evict_lru(replacedTagL3, L2, timeBlockAddedL2); // evict replaced L3 block from L2.
             }

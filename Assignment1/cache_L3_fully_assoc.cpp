@@ -14,6 +14,7 @@ constexpr int L3_SETS = 2048;
 constexpr int NUM_L3_TAGS = 16;
 constexpr int LOG_L3_SETS = 11;
 constexpr ull L3_SET_BITS = 0x7ff;
+constexpr ull MAX_L3_ASSOC = 32768;
 
 class Cache{
     public:
@@ -144,6 +145,7 @@ class IncCache : public Cache {
             l2_misses++;
             l3_hits++;
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+            update_priority(setL3, tagL3, NUM_L3_TAGS);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
@@ -176,7 +178,84 @@ class NINECache : public Cache {
         }
 };
 
+
 class LRUCacheFully : public Cache {
+    private:
+        // greater comparator for comparing pair <ull, ull>
+        struct cmp {
+            bool operator() (std::pair<ull, ull> p1, std::pair<ull, ull> p2) const {
+                return p1.first > p2.first;
+            }
+        };
+        std::unordered_map <ull, ull> faL3;
+        std::set <std::pair<ull, ull>> faTimeBlockAddedL3; // {time, addr}
+        // checks in cache
+        int check_in_cache(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
+            if(maxTags == NUM_L2_TAGS){
+                for(int i = 0; i < maxTags; i++){
+                    if(Lx[st][i].second == true and Lx[st][i].first == tag){
+                        return i;
+                    }
+                }
+            }
+            else {
+                ull addr = get_addr(st, tag, maxTags);
+                if(faL3.find(addr) != faL3.end()){return 1;}
+            }
+            return -1;
+        }
+        // updates LRU list of times.
+        virtual void update_priority(ull st, ull tag, int maxTags){
+            if(maxTags == NUM_L2_TAGS){
+                auto maxValue = *(std::max_element(timeBlockAddedL2[st].begin(), timeBlockAddedL2[st].end()));
+                int tag_index = check_in_cache(st, tag, L2, maxTags);
+                if(tag_index != -1) timeBlockAddedL2[st][tag_index] = maxValue + 1;
+            }
+            else {
+                ull addr = get_addr(st, tag, maxTags);
+                auto it = faTimeBlockAddedL3.find({faL3[addr], addr});
+                faTimeBlockAddedL3.erase(it);
+                faTimeBlockAddedL3.insert({time, addr});
+                faL3[addr] = time;
+            }
+        }
+        // uses LRU to replace from L3
+        blk replace_l3(ull st, ull tag){
+            blk retBlock = {0, false};
+            if(faL3.size() == MAX_L3_ASSOC) {
+                retBlock.second = true;
+                //get tag evicted.
+                auto [prevTime, replacedAddr] = *faTimeBlockAddedL3.begin();
+                faTimeBlockAddedL3.erase(faTimeBlockAddedL3.begin());
+                retBlock.first = replacedAddr;
+                faL3.erase(replacedAddr);
+            }
+            ull addr = get_addr(st, tag, NUM_L3_TAGS);
+            faL3[addr] = time;
+            faTimeBlockAddedL3.insert({time, addr});
+            return retBlock;
+        }
+        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            // increase respective counters
+            l2_misses++;
+            l3_hits++;
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+            update_priority(setL3, tagL3, NUM_L3_TAGS);
+        }
+        void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
+            // increase respective counters
+            l2_misses++;
+            l3_misses++;
+            auto [replacedAddrL3, validL3] = replace_l3(setL3, tagL3); // evict from L3 first.
+            auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
+            evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
+        }
+    public:
+        LRUCacheFully() : Cache() {}
+};
+
+class BeladyCacheFully : public Cache {
     private:
         // greater comparator for comparing pair <ull, ull>
         struct cmp {
@@ -217,20 +296,66 @@ class LRUCacheFully : public Cache {
                 faL3[addr] = *futureAccesses[addr].begin();
             }
         }
-        void bring_from_llc(ull addr, ull tag){
+        // uses LRU to replace from L3
+        blk replace_l3(ull st, ull tag){
+            blk retBlock = {0, false};
+            if(faL3.size() == MAX_L3_ASSOC) {
+                retBlock.second = true;
+                //get tag evicted.
+                auto [prevTime, replacedAddr] = *timeForNextAccessL3.begin();
+                timeForNextAccessL3.erase(timeForNextAccessL3.begin());
+                retBlock.first = replacedAddr;
+                faL3.erase(replacedAddr);
+            }
+            ull addr = get_addr(st, tag, NUM_L3_TAGS);
+            faL3[addr] = *futureAccesses[addr].begin();
+            timeForNextAccessL3.insert({*futureAccesses[addr].begin(), addr});
+            return retBlock;
+        }
+        void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             // increase respective counters
             l2_misses++;
             l3_hits++;
-            
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+            update_priority(setL3, tagL3, NUM_L3_TAGS);
         }
-        void bring_from_memory(ull addr, ull tag){
+        void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             // increase respective counters
             l2_misses++;
             l3_misses++;
-            
+            auto [replacedAddrL3, validL3] = replace_l3(setL3, tagL3); // evict from L3 first.
+            auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
+            evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
         }
     public:
-        LRUCacheFully() : Cache() {}
+        BeladyCacheFully(char *argv[]) : Cache() {
+            FILE *fp;
+            char input_name[256];
+            int numtraces = atoi(argv[2]);
+            char i_or_d;
+            char type;
+            ull addr, time = 0;
+            unsigned pc;
+            for (int k=0; k<numtraces; k++) {
+                sprintf(input_name, "traces/%s_%d", argv[1], k);
+                fp = fopen(input_name, "rb");
+                std::cout << input_name << "\n";
+                assert(fp != NULL);
+
+                while (!feof(fp)) {
+                    fread(&i_or_d, sizeof(char), 1, fp);
+                    fread(&type, sizeof(char), 1, fp);
+                    fread(&addr, sizeof(ull), 1, fp);
+                    fread(&pc, sizeof(unsigned), 1, fp);
+                    addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
+                    futureAccesses[addr].insert(time);
+                    time++;
+                }
+                fclose(fp);
+                printf("Done reading file %d!\n", k);
+            }
+        }
 };
 
 int main(int argc, char *argv[]){

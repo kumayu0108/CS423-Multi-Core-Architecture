@@ -190,12 +190,7 @@ class NINECache : public Cache {
 
 class LRUCacheFully : public Cache {
     private:
-        // greater comparator for comparing pair <ull, ull>
-        struct cmp {
-            bool operator() (std::pair<ull, ull> p1, std::pair<ull, ull> p2) const {
-                return p1.first > p2.first;
-            }
-        };
+        std :: unordered_set <ull> prevSeenAddr;
         std::unordered_map <ull, ull> faL3;
         std::set <std::pair<ull, ull>> faTimeBlockAddedL3; // {time, addr}
         // checks in cache
@@ -255,17 +250,20 @@ class LRUCacheFully : public Cache {
             // increase respective counters
             l2_misses++;
             l3_misses++;
+            if(prevSeenAddr.find(addr) == prevSeenAddr.end()){cold_misses++; prevSeenAddr.insert(addr);}
             auto [replacedAddrL3, validL3] = replace_l3(setL3, tagL3); // evict from L3 first.
             auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
             evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
         }
     public:
-        LRUCacheFully() : Cache() {}
+        ull cold_misses;
+        LRUCacheFully() : Cache() {cold_misses = 0;}
 };
 
 class BeladyCacheFully : public Cache {
     private:
+        std :: unordered_set <ull> prevSeenAddr;
         // greater comparator for comparing pair <ull, ull>
         struct cmp {
             bool operator() (std::pair<ull, ull> p1, std::pair<ull, ull> p2) const {
@@ -334,13 +332,16 @@ class BeladyCacheFully : public Cache {
             // increase respective counters
             l2_misses++;
             l3_misses++;
+            if(prevSeenAddr.find(addr) == prevSeenAddr.end()){cold_misses++; prevSeenAddr.insert(addr);}
             auto [replacedAddrL3, validL3] = replace_l3(setL3, tagL3); // evict from L3 first.
             auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
             evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
         }
     public:
+        ull cold_misses;
         BeladyCacheFully(char *argv[]) : Cache() {
+            cold_misses = 0;
             FILE *fp;
             char input_name[256];
             int numtraces = atoi(argv[2]);
@@ -424,8 +425,17 @@ int main(int argc, char *argv[]){
     cout << "Exclusive: " << "l2_hits:" << excache.l2_hits << " l2_misses:" << excache.l2_misses << " l3_hits:" << excache.l3_hits << " l3_misses:" << excache.l3_misses << " l2_total:" << excache.l2_hits + excache.l2_misses << " l3_total:" << excache.l3_hits + excache.l3_misses << endl;
     cout << "Inclusive: " << "l2_hits:" << incache.l2_hits << " l2_misses:" << incache.l2_misses << " l3_hits:" << incache.l3_hits << " l3_misses:" << incache.l3_misses << " l2_total:" << incache.l2_hits + incache.l2_misses << " l3_total:" << incache.l3_hits + incache.l3_misses << endl;
     cout << "Nine:      " << "l2_hits:" << ninecache.l2_hits << " l2_misses:" << ninecache.l2_misses << " l3_hits:" << ninecache.l3_hits << " l3_misses:" << ninecache.l3_misses << " l2_total:" << ninecache.l2_hits + ninecache.l2_misses << " l3_total:" << ninecache.l3_hits + ninecache.l3_misses << endl;
+    cout << endl; 
     cout << "LRU FA:    " << "l2_hits:" << lrucache.l2_hits << " l2_misses:" << lrucache.l2_misses << " l3_hits:" << lrucache.l3_hits << " l3_misses:" << lrucache.l3_misses << " l2_total:" << lrucache.l2_hits + lrucache.l2_misses << " l3_total:" << lrucache.l3_hits + lrucache.l3_misses << endl;
     cout << "Belady:    " << "l2_hits:" << belcache.l2_hits << " l2_misses:" << belcache.l2_misses << " l3_hits:" << belcache.l3_hits << " l3_misses:" << belcache.l3_misses << " l2_total:" << belcache.l2_hits + belcache.l2_misses << " l3_total:" << belcache.l3_hits + belcache.l3_misses << endl;
+    cout << endl; 
+    cout << "LRU Cold:       " << lrucache.cold_misses;
+    cout << " LRU Capacity:    " << lrucache.l3_misses - lrucache.cold_misses << endl;
+    cout << "Belady Cold:    " << belcache.cold_misses;
+    cout << " Belady Capacity: " << belcache.l3_misses - belcache.cold_misses << endl;
+    cout << "Inclusive Cold: " << lrucache.cold_misses << endl;
+    cout << "Inclusive Conflict (Belady): " << incache.l3_misses - belcache.l3_misses << endl;
+    cout << "Inclusive Conflict (LRU):    " << incache.l3_misses - lrucache.l3_misses << endl;
 
     return 0;
 }

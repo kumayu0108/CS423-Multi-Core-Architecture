@@ -18,21 +18,26 @@ constexpr ull MAX_L3_ASSOC = 32768;
 
 class Cache{
     public:
-        unsigned long l2_hits, l2_misses, l3_hits, l3_misses, time = 0;
+        ull l2_hits, l2_misses, l3_hits, l3_misses, time;
         Cache():
             L2(L2_SETS, std::vector<blk> (NUM_L2_TAGS, {0, false})),
             timeBlockAddedL2(L2_SETS, std::vector <ull> (NUM_L2_TAGS, 0)),
             L3(L3_SETS, std::vector<blk> (NUM_L3_TAGS, {0, false})),
             timeBlockAddedL3(L3_SETS, std::vector <ull> (NUM_L3_TAGS, 0)),
-            l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0) {}
+            l2_hits(0), l2_misses(0), l3_hits(0), l3_misses(0), time(0) {}
 
         virtual void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
         virtual void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
 
         void simulator(char type, ull addr) {
-            if(static_cast<int>(type) == 0) { return; } // if write perm miss, treat as hit, ignore.
+            if(static_cast<int>(type) == 0) { time++; return; } // if write perm miss, treat as hit, ignore.
             if(!futureAccesses.empty()){
+                // if(*futureAccesses[addr].begin() != time){
+                //     std :: cout << time << " " << *futureAccesses[addr].begin() << " " << addr << std::endl;
+                // }
+                assert(*futureAccesses[addr].begin() == time);
                 futureAccesses[addr].erase(futureAccesses[addr].begin());
+                assert(*futureAccesses[addr].begin() > time);
             }
             auto [setL2, tagL2] = decode_address(addr, L2_SET_BITS, LOG_L2_SETS);
             auto [setL3, tagL3] = decode_address(addr, L3_SET_BITS, LOG_L3_SETS);
@@ -40,6 +45,11 @@ class Cache{
             if((l2_ind = check_in_cache(setL2, tagL2, L2, NUM_L2_TAGS)) != -1) {
                 l2_hits++;
                 update_priority(setL2, tagL2, NUM_L2_TAGS);
+                if(!futureAccesses.empty()){
+                    // std::cout << "hit!";
+                    // exit(0);
+                    update_priority(setL3, tagL3, NUM_L3_TAGS);
+                }
             }
             else if((l3_ind = check_in_cache(setL3, tagL3, L3, NUM_L3_TAGS)) != -1)
                 bring_from_llc(addr, setL2, tagL2, setL3, tagL3);
@@ -178,7 +188,6 @@ class NINECache : public Cache {
         }
 };
 
-
 class LRUCacheFully : public Cache {
     private:
         // greater comparator for comparing pair <ull, ull>
@@ -281,7 +290,7 @@ class BeladyCacheFully : public Cache {
             return -1;
         }
         // updates LRU list of times.
-        virtual void update_priority(ull st, ull tag, int maxTags){
+        void update_priority(ull st, ull tag, int maxTags){
             if(maxTags == NUM_L2_TAGS){
                 auto maxValue = *(std::max_element(timeBlockAddedL2[st].begin(), timeBlockAddedL2[st].end()));
                 int tag_index = check_in_cache(st, tag, L2, maxTags);
@@ -306,10 +315,12 @@ class BeladyCacheFully : public Cache {
                 timeForNextAccessL3.erase(timeForNextAccessL3.begin());
                 retBlock.first = replacedAddr;
                 faL3.erase(replacedAddr);
+                assert(prevTime > time);
             }
             ull addr = get_addr(st, tag, NUM_L3_TAGS);
             faL3[addr] = *futureAccesses[addr].begin();
             timeForNextAccessL3.insert({*futureAccesses[addr].begin(), addr});
+            assert(*futureAccesses[addr].begin() > time);
             return retBlock;
         }
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
@@ -349,11 +360,15 @@ class BeladyCacheFully : public Cache {
                     fread(&addr, sizeof(ull), 1, fp);
                     fread(&pc, sizeof(unsigned), 1, fp);
                     addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
-                    futureAccesses[addr].insert(time);
+                    if(static_cast<int>(type) != 0) { 
+                        futureAccesses[addr].insert(time);
+                    }
                     time++;
                 }
                 fclose(fp);
-                printf("Done reading file %d!\n", k);
+            }
+            for(auto &st : futureAccesses){
+                st.second.insert(INT32_MAX);
             }
         }
 };
@@ -372,10 +387,12 @@ int main(int argc, char *argv[]){
     char i_or_d;
     char type;
     ull addr;
-    unsigned pc;
+    unsigned pc, time = 0;
     ExCache excache;
     IncCache incache;
     NINECache ninecache;
+    LRUCacheFully lrucache;
+    BeladyCacheFully belcache(argv);
     for (int k=0; k<numtraces; k++) {
         sprintf(input_name, "traces/%s_%d", argv[1], k);
         fp = fopen(input_name, "rb");
@@ -390,9 +407,16 @@ int main(int argc, char *argv[]){
             // std::cout << (int)i_or_d << " " << (int)type << " " << addr << " " << pc << std::endl;
             // Process the entry
             addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
+            // if(time <= 23){
+            //     std :: cout << " {" << addr << "} ";
+            // }
+            // if(time == 500000){break;}
             excache.simulator(type, addr);
             incache.simulator(type, addr);
             ninecache.simulator(type, addr);
+            lrucache.simulator(type, addr);
+            belcache.simulator(type, addr);
+            // time++;
         }
         fclose(fp);
         printf("Done reading file %d!\n", k);
@@ -400,6 +424,8 @@ int main(int argc, char *argv[]){
     cout << "l2_hits:" << excache.l2_hits << " l2_misses:" << excache.l2_misses << " l3_hits:" << excache.l3_hits << " l3_misses:" << excache.l3_misses << " l2_total:" << excache.l2_hits + excache.l2_misses << " l3_total:" << excache.l3_hits + excache.l3_misses << endl;
     cout << "l2_hits:" << incache.l2_hits << " l2_misses:" << incache.l2_misses << " l3_hits:" << incache.l3_hits << " l3_misses:" << incache.l3_misses << " l2_total:" << incache.l2_hits + incache.l2_misses << " l3_total:" << incache.l3_hits + incache.l3_misses << endl;
     cout << "l2_hits:" << ninecache.l2_hits << " l2_misses:" << ninecache.l2_misses << " l3_hits:" << ninecache.l3_hits << " l3_misses:" << ninecache.l3_misses << " l2_total:" << ninecache.l2_hits + ninecache.l2_misses << " l3_total:" << ninecache.l3_hits + ninecache.l3_misses << endl;
+    cout << "l2_hits:" << lrucache.l2_hits << " l2_misses:" << lrucache.l2_misses << " l3_hits:" << lrucache.l3_hits << " l3_misses:" << lrucache.l3_misses << " l2_total:" << lrucache.l2_hits + lrucache.l2_misses << " l3_total:" << lrucache.l3_hits + lrucache.l3_misses << endl;
+    cout << "l2_hits:" << belcache.l2_hits << " l2_misses:" << belcache.l2_misses << " l3_hits:" << belcache.l3_hits << " l3_misses:" << belcache.l3_misses << " l2_total:" << belcache.l2_hits + belcache.l2_misses << " l3_total:" << belcache.l3_hits + belcache.l3_misses << endl;
 
     return 0;
 }

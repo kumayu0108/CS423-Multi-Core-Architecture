@@ -37,6 +37,7 @@ class Cache{
                 // }
                 assert(*futureAccesses[addr].begin() == time);
                 futureAccesses[addr].erase(futureAccesses[addr].begin());
+                assert(!futureAccesses[addr].empty());
                 assert(*futureAccesses[addr].begin() > time);
             }
             auto [setL2, tagL2] = decode_address(addr, L2_SET_BITS, LOG_L2_SETS);
@@ -216,6 +217,8 @@ class LRUCacheFully : public Cache {
             else {
                 ull addr = get_addr(st, tag, maxTags);
                 auto it = faTimeBlockAddedL3.find({faL3[addr], addr});
+                assert(it != faTimeBlockAddedL3.end());
+                assert(faL3[addr] < time);
                 faTimeBlockAddedL3.erase(it);
                 faTimeBlockAddedL3.insert({time, addr});
                 faL3[addr] = time;
@@ -250,8 +253,11 @@ class LRUCacheFully : public Cache {
             l3_misses++;
             if(prevSeenAddr.find(addr) == prevSeenAddr.end()){cold_misses++; prevSeenAddr.insert(addr);}
             auto [replacedAddrL3, validL3] = replace_l3(setL3, tagL3); // evict from L3 first.
-            auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
-            evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            if(validL3)
+            {
+                auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
+                evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            }
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
         }
     public:
@@ -325,6 +331,7 @@ class BeladyCacheFully : public Cache {
             l3_hits++;
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
             update_priority(setL3, tagL3, NUM_L3_TAGS);
+            assert(faL3.size() <= MAX_L3_ASSOC);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             // increase respective counters
@@ -332,9 +339,13 @@ class BeladyCacheFully : public Cache {
             l3_misses++;
             if(prevSeenAddr.find(addr) == prevSeenAddr.end()){cold_misses++; prevSeenAddr.insert(addr);}
             auto [replacedAddrL3, validL3] = replace_l3(setL3, tagL3); // evict from L3 first.
-            auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
-            evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            if(validL3)
+            {
+                auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
+                evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            }
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
+            assert(faL3.size() <= MAX_L3_ASSOC);
         }
     public:
         ull cold_misses;
@@ -431,8 +442,8 @@ int main(int argc, char *argv[]){
     cout << "Belady Cold:    " << belcache.cold_misses;
     cout << " Belady Capacity: " << belcache.l3_misses - belcache.cold_misses << endl;
     cout << "Inclusive Cold: " << lrucache.cold_misses << endl;
-    cout << "Inclusive Conflict (Belady): " << incache.l3_misses - belcache.l3_misses << endl;
-    cout << "Inclusive Conflict (LRU):    " << incache.l3_misses - lrucache.l3_misses << endl;
+    cout << "Inclusive Conflict (Belady): " << (long long)incache.l3_misses - (long long)belcache.l3_misses << endl;
+    cout << "Inclusive Conflict (LRU):    " << (long long)incache.l3_misses - (long long)lrucache.l3_misses << endl;
 
     return 0;
 }

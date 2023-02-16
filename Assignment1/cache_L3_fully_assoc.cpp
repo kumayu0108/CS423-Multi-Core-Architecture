@@ -122,6 +122,7 @@ class Cache{
             auto &timeBlockAddedLx = (maxTags == NUM_L2_TAGS) ? timeBlockAddedL2 : timeBlockAddedL3;
             auto maxValue = *(std::max_element(timeBlockAddedLx[st].begin(), timeBlockAddedLx[st].end()));
             int tag_index = check_in_cache(st, tag, Lx, maxTags);
+            assert(tag_index != -1);
             if(tag_index != -1) timeBlockAddedLx[st][tag_index] = maxValue + 1;
         }
     private:
@@ -154,37 +155,34 @@ class IncCache : public Cache {
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_hits++;
-            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
             update_priority(setL3, tagL3, NUM_L3_TAGS);
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_misses++;
             auto [replacedAddrL3, validL3] = replace(setL3, tagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // evict from L3 first.
-            auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
-            evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            if(validL3)
+            {
+                auto [replacedSetL2, replacedTagL2] = decode_address(replacedAddrL3, L2_SET_BITS, LOG_L2_SETS); // decode addr wrt L2;
+                evict(replacedSetL2, replacedTagL2, L2, NUM_L2_TAGS); // invalidate corresponding entry in L2.
+            }
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
         }
 };
 class NINECache : public Cache {
     private:
-        void evict_replace_l2(ull setL2, ull tagL2){
-            auto [replacedAddrL2, valid] = replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
-            if(!valid) { return; } // if invalid block evicted, just return
-            auto [replacedSetL3, replacedTagL3] = decode_address(replacedAddrL2, L3_SET_BITS, LOG_L3_SETS); // else get set and tag to try wb in L3.
-            if(check_in_cache(replacedSetL3, replacedTagL3, L3, NUM_L3_TAGS) != -1) { return ; } // if already exists in L3, dont do anything.
-            replace(replacedSetL3, replacedTagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // else replace block in L3
-        }
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_hits++;
-            evict_replace_l2(setL2, tagL2);
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
+            update_priority(setL3, tagL3, NUM_L3_TAGS);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             l2_misses++;
             l3_misses++;
             replace(setL3, tagL3, L3, timeBlockAddedL3, NUM_L3_TAGS); // evict from L3 first.
-            evict_replace_l2(setL2, tagL2); // then evict from L2;
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
         }
 };
 
@@ -361,7 +359,7 @@ class BeladyCacheFully : public Cache {
                     fread(&addr, sizeof(ull), 1, fp);
                     fread(&pc, sizeof(unsigned), 1, fp);
                     addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
-                    if(static_cast<int>(type) != 0) { 
+                    if(static_cast<int>(type) != 0) {
                         futureAccesses[addr].insert(time);
                     }
                     time++;
@@ -373,7 +371,6 @@ class BeladyCacheFully : public Cache {
             }
         }
 };
-
 int main(int argc, char *argv[]){
     using std::cout;
     using std::endl;
@@ -425,10 +422,10 @@ int main(int argc, char *argv[]){
     cout << "Exclusive: " << "l2_hits:" << excache.l2_hits << " l2_misses:" << excache.l2_misses << " l3_hits:" << excache.l3_hits << " l3_misses:" << excache.l3_misses << " l2_total:" << excache.l2_hits + excache.l2_misses << " l3_total:" << excache.l3_hits + excache.l3_misses << endl;
     cout << "Inclusive: " << "l2_hits:" << incache.l2_hits << " l2_misses:" << incache.l2_misses << " l3_hits:" << incache.l3_hits << " l3_misses:" << incache.l3_misses << " l2_total:" << incache.l2_hits + incache.l2_misses << " l3_total:" << incache.l3_hits + incache.l3_misses << endl;
     cout << "Nine:      " << "l2_hits:" << ninecache.l2_hits << " l2_misses:" << ninecache.l2_misses << " l3_hits:" << ninecache.l3_hits << " l3_misses:" << ninecache.l3_misses << " l2_total:" << ninecache.l2_hits + ninecache.l2_misses << " l3_total:" << ninecache.l3_hits + ninecache.l3_misses << endl;
-    cout << endl; 
+    cout << endl;
     cout << "LRU FA:    " << "l2_hits:" << lrucache.l2_hits << " l2_misses:" << lrucache.l2_misses << " l3_hits:" << lrucache.l3_hits << " l3_misses:" << lrucache.l3_misses << " l2_total:" << lrucache.l2_hits + lrucache.l2_misses << " l3_total:" << lrucache.l3_hits + lrucache.l3_misses << endl;
     cout << "Belady:    " << "l2_hits:" << belcache.l2_hits << " l2_misses:" << belcache.l2_misses << " l3_hits:" << belcache.l3_hits << " l3_misses:" << belcache.l3_misses << " l2_total:" << belcache.l2_hits + belcache.l2_misses << " l3_total:" << belcache.l3_hits + belcache.l3_misses << endl;
-    cout << endl; 
+    cout << endl;
     cout << "LRU Cold:       " << lrucache.cold_misses;
     cout << " LRU Capacity:    " << lrucache.l3_misses - lrucache.cold_misses << endl;
     cout << "Belady Cold:    " << belcache.cold_misses;

@@ -2,6 +2,7 @@
 
 traces/
 bin/
+cache
 
 *.zip
 *.exe

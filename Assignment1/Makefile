@@ -1,4 +1,4 @@
 all:
-	g++ -O3 -std=c++17 cache_L3_fully_assoc.cpp -o cache
+	g++ -O3 -std=c++17 cache.cpp -o cache
 clean:
 	rm -rf cache

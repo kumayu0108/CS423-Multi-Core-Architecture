@@ -5,16 +5,17 @@
 #define ull unsigned long long
 //defines a cache block. contains a tag and a valid bit.
 #define blk std::pair<ull, bool>
-constexpr int LOG_BLOCK_SIZE = 6;
-constexpr int L2_SETS = 1024;
-constexpr int NUM_L2_TAGS = 8;
-constexpr int LOG_L2_SETS = 10;
-constexpr ull L2_SET_BITS = 0x3ff;
-constexpr int L3_SETS = 2048;
-constexpr int NUM_L3_TAGS = 16;
-constexpr int LOG_L3_SETS = 11;
-constexpr ull L3_SET_BITS = 0x7ff;
-constexpr ull MAX_L3_ASSOC = 32768;
+constexpr int LOG_BLOCK_SIZE = 1;
+constexpr int L2_SETS = 2;
+constexpr int NUM_L2_TAGS = 2;
+constexpr int LOG_L2_SETS = 1;
+constexpr ull L2_SET_BITS = 0x001;
+constexpr int L3_SETS = 4;
+constexpr int NUM_L3_TAGS = 4;
+constexpr int LOG_L3_SETS = 2;
+constexpr ull L3_SET_BITS = 0x3;
+constexpr ull MAX_L3_ASSOC = 16;
+constexpr ull time_max = 200;
 
 class Cache{
     public:
@@ -33,9 +34,6 @@ class Cache{
             __addr = addr;
             if(static_cast<int>(type) == 0) { time++; return; } // if write perm miss, treat as hit, ignore.
             if(!futureAccesses.empty()){
-                // if(*futureAccesses[addr].begin() != time){
-                //     std :: cout << time << " " << *futureAccesses[addr].begin() << " " << addr << std::endl;
-                // }
                 assert(*futureAccesses[addr].begin() == time);
                 futureAccesses[addr].erase(futureAccesses[addr].begin());
                 assert(!futureAccesses[addr].empty());
@@ -123,6 +121,7 @@ class BeladyCacheFully : public Cache {
         };
         std::unordered_map <ull, ull> faL3;
         std::set <std::pair<ull, ull>, cmp > timeForNextAccessL3;
+        std::vector<ull>addrs;
         // checks in cache
         int check_in_cache(ull st, ull tag, std::vector <std::vector<blk>> &Lx, int maxTags){
             if(maxTags == NUM_L2_TAGS){
@@ -149,7 +148,6 @@ class BeladyCacheFully : public Cache {
             else {
                 ull addr = get_addr(st, tag, maxTags);
                 assert(addr == __addr);
-                assert(faL3.find(addr) != faL3.end());
                 auto it = timeForNextAccessL3.find({faL3[addr], addr});
                 // assert(faL3[tag] == time);
                 assert(it != timeForNextAccessL3.end());
@@ -158,7 +156,6 @@ class BeladyCacheFully : public Cache {
                 assert((*timeForNextAccessL3.rbegin()).first > time);
                 assert((*timeForNextAccessL3.rbegin()).first <= (*timeForNextAccessL3.begin()).first);
                 faL3[addr] = *futureAccesses[addr].begin();
-                assert(faL3.size() == timeForNextAccessL3.size());
             }
         }
         // uses Belady to replace from L3
@@ -167,27 +164,39 @@ class BeladyCacheFully : public Cache {
             if(faL3.size() == MAX_L3_ASSOC) {
                 retBlock.second = true;
                 //get tag evicted.
-                assert(faL3.size() == timeForNextAccessL3.size());
                 auto [prevTime, replacedAddr] = *timeForNextAccessL3.begin();
+                std::cout<<"replacedADdr: "<<replacedAddr<<" time: "<<time<<" \n";
+                for(auto x: timeForNextAccessL3)
+                {
+                    std::cout<<" time: "<<x.first<<" addr: "<<x.second<<"\n";
+                }
+                assert(addrs[time] = __addr);
+                std::unordered_set<ull>time_addr;
+                ull __max_time = 0, __max_time_addr;
+                for(int i = time + 1; i < addrs.size(); i++)
+                {
+                    if(addrs[i] == INT64_MAX) continue;
+                    if(faL3.find(addrs[i]) != faL3.end() && time_addr.find(addrs[i]) == time_addr.end())
+                    {
+                        time_addr.insert(addrs[i]);
+                        if(i > __max_time){__max_time = i; __max_time_addr = addrs[i];}
+                    }
+                }
+                assert(__max_time_addr == replacedAddr);
                 timeForNextAccessL3.erase(timeForNextAccessL3.begin());
                 retBlock.first = replacedAddr;
                 faL3.erase(replacedAddr);
                 assert(prevTime > time);
                 assert(prevTime > (*timeForNextAccessL3.begin()).first);
-                assert(faL3.size() == timeForNextAccessL3.size());
             }
-            assert(faL3.size() == timeForNextAccessL3.size());
             ull addr = get_addr(st, tag, NUM_L3_TAGS);
             assert(addr == __addr);
             assert(faL3.find(addr) == faL3.end());
             faL3[addr] = *futureAccesses[addr].begin();
-            std::cout<<faL3.size()<<" before"<<timeForNextAccessL3.size()<<" \n";
             timeForNextAccessL3.insert({*futureAccesses[addr].begin(), addr});
-            std::cout<<faL3.size()<<" after"<<timeForNextAccessL3.size()<<" "<<*(futureAccesses[addr].begin())<<" "<<addr<<"\n";
-            // assert((*timeForNextAccessL3.rbegin()).first > time);
-            // assert((*timeForNextAccessL3.rbegin()).first <= (*timeForNextAccessL3.begin()).first);
-            // assert(*futureAccesses[addr].begin() > time);
-            assert(faL3.size() == timeForNextAccessL3.size());
+            assert((*timeForNextAccessL3.rbegin()).first > time);
+            assert((*timeForNextAccessL3.rbegin()).first <= (*timeForNextAccessL3.begin()).first);
+            assert(*futureAccesses[addr].begin() > time);
             return retBlock;
         }
         void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
@@ -196,15 +205,15 @@ class BeladyCacheFully : public Cache {
             l3_hits++;
             update_priority(setL3, tagL3, NUM_L3_TAGS);
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
+            assert(faL3.size() == timeForNextAccessL3.size());
             assert(faL3.size() <= MAX_L3_ASSOC);
-            assert(faL3.size() == timeForNextAccessL3.size());
             assert(timeForNextAccessL3.size() <= MAX_L3_ASSOC);
-            assert(faL3.size() == timeForNextAccessL3.size());
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             // increase respective counters
             l2_misses++;
             l3_misses++;
+            std::cout<<"caled bfm\n";
             if(prevSeenAddr.find(addr) == prevSeenAddr.end()){cold_misses++; prevSeenAddr.insert(addr);}
             auto [replacedAddrL3, validL3] = replace_l3(setL3, tagL3); // evict from L3 first.
             if(validL3)
@@ -239,10 +248,17 @@ class BeladyCacheFully : public Cache {
                     fread(&type, sizeof(char), 1, fp);
                     fread(&addr, sizeof(ull), 1, fp);
                     fread(&pc, sizeof(unsigned), 1, fp);
+                    addr = addr%128;
                     addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
                     if(static_cast<int>(type) != 0) {
                         futureAccesses[addr].insert(time);
+                        addrs.push_back(addr);
                     }
+                    else
+                    {
+                        addrs.push_back(INT64_MAX);
+                    }
+                    if(time == time_max) break;
                     time++;
                 }
                 fclose(fp);
@@ -279,15 +295,15 @@ int main(int argc, char *argv[]){
             fread(&type, sizeof(char), 1, fp);
             fread(&addr, sizeof(ull), 1, fp);
             fread(&pc, sizeof(unsigned), 1, fp);
-            // std::cout << (int)i_or_d << " " << (int)type << " " << addr << " " << pc << std::endl;
             // Process the entry
+            addr = addr % 128;
             addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
-            // if(time <= 23){
-            //     std :: cout << " {" << addr << "} ";
+            // if(time <= 100){
+                // std :: cout << " {" << addr << "} ";
             // }
-            // if(time == 500000){break;}
+            if(time == time_max){break;}
             belcache.simulator(type, addr);
-            // time++;
+            time++;
         }
         fclose(fp);
         printf("Done reading file %d!\n", k);

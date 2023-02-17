@@ -47,8 +47,6 @@ class Cache{
                 l2_hits++;
                 update_priority(setL2, tagL2, NUM_L2_TAGS);
                 if(!futureAccesses.empty()){
-                    // std::cout << "hit!";
-                    // exit(0);
                     update_priority(setL3, tagL3, NUM_L3_TAGS);
                 }
             }
@@ -186,7 +184,6 @@ class NINECache : public Cache {
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2
         }
 };
-
 class LRUCacheFully : public Cache {
     private:
         std :: unordered_set <ull> prevSeenAddr;
@@ -264,7 +261,6 @@ class LRUCacheFully : public Cache {
         ull cold_misses;
         LRUCacheFully() : Cache() {cold_misses = 0;}
 };
-
 class BeladyCacheFully : public Cache {
     private:
         std :: unordered_set <ull> prevSeenAddr;
@@ -302,8 +298,11 @@ class BeladyCacheFully : public Cache {
                 ull addr = get_addr(st, tag, maxTags);
                 auto it = timeForNextAccessL3.find({faL3[addr], addr});
                 // assert(faL3[tag] == time);
+                assert(it != timeForNextAccessL3.end());
                 timeForNextAccessL3.erase(it);
                 timeForNextAccessL3.insert({*futureAccesses[addr].begin(), addr});
+                assert((*timeForNextAccessL3.rbegin()).first > time);
+                assert((*timeForNextAccessL3.rbegin()).first <= (*timeForNextAccessL3.begin()).first);
                 faL3[addr] = *futureAccesses[addr].begin();
             }
         }
@@ -322,6 +321,8 @@ class BeladyCacheFully : public Cache {
             ull addr = get_addr(st, tag, NUM_L3_TAGS);
             faL3[addr] = *futureAccesses[addr].begin();
             timeForNextAccessL3.insert({*futureAccesses[addr].begin(), addr});
+            assert((*timeForNextAccessL3.rbegin()).first > time);
+            assert((*timeForNextAccessL3.rbegin()).first <= (*timeForNextAccessL3.begin()).first);
             assert(*futureAccesses[addr].begin() > time);
             return retBlock;
         }

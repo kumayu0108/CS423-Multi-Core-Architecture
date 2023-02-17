@@ -18,7 +18,7 @@ constexpr ull MAX_L3_ASSOC = 32768;
 
 class Cache{
     public:
-        ull l2_hits, l2_misses, l3_hits, l3_misses, time;
+        ull l2_hits, l2_misses, l3_hits, l3_misses, time, __addr;
         Cache():
             L2(L2_SETS, std::vector<blk> (NUM_L2_TAGS, {0, false})),
             timeBlockAddedL2(L2_SETS, std::vector <ull> (NUM_L2_TAGS, 0)),
@@ -30,6 +30,7 @@ class Cache{
         virtual void bring_from_llc(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3) = 0;
 
         void simulator(char type, ull addr) {
+            __addr = addr;
             if(static_cast<int>(type) == 0) { time++; return; } // if write perm miss, treat as hit, ignore.
             if(!futureAccesses.empty()){
                 // if(*futureAccesses[addr].begin() != time){
@@ -283,6 +284,7 @@ class BeladyCacheFully : public Cache {
             }
             else {
                 ull addr = get_addr(st, tag, maxTags);
+                assert(addr == __addr);
                 if(faL3.find(addr) != faL3.end()){return 1;}
             }
             return -1;
@@ -296,6 +298,7 @@ class BeladyCacheFully : public Cache {
             }
             else {
                 ull addr = get_addr(st, tag, maxTags);
+                assert(addr == __addr);
                 auto it = timeForNextAccessL3.find({faL3[addr], addr});
                 // assert(faL3[tag] == time);
                 assert(it != timeForNextAccessL3.end());
@@ -306,7 +309,7 @@ class BeladyCacheFully : public Cache {
                 faL3[addr] = *futureAccesses[addr].begin();
             }
         }
-        // uses LRU to replace from L3
+        // uses Belady to replace from L3
         blk replace_l3(ull st, ull tag){
             blk retBlock = {0, false};
             if(faL3.size() == MAX_L3_ASSOC) {
@@ -317,8 +320,11 @@ class BeladyCacheFully : public Cache {
                 retBlock.first = replacedAddr;
                 faL3.erase(replacedAddr);
                 assert(prevTime > time);
+                assert(prevTime > (*timeForNextAccessL3.begin()).first);
             }
             ull addr = get_addr(st, tag, NUM_L3_TAGS);
+            assert(addr == __addr);
+            assert(faL3.find(addr) == faL3.end());
             faL3[addr] = *futureAccesses[addr].begin();
             timeForNextAccessL3.insert({*futureAccesses[addr].begin(), addr});
             assert((*timeForNextAccessL3.rbegin()).first > time);
@@ -330,9 +336,10 @@ class BeladyCacheFully : public Cache {
             // increase respective counters
             l2_misses++;
             l3_hits++;
-            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
             update_priority(setL3, tagL3, NUM_L3_TAGS);
+            replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS);
             assert(faL3.size() <= MAX_L3_ASSOC);
+            assert(timeForNextAccessL3.size() <= MAX_L3_ASSOC);
         }
         void bring_from_memory(ull addr, ull setL2, ull tagL2, ull setL3, ull tagL3){
             // increase respective counters
@@ -347,6 +354,7 @@ class BeladyCacheFully : public Cache {
             }
             replace(setL2, tagL2, L2, timeBlockAddedL2, NUM_L2_TAGS); // evict from L2.
             assert(faL3.size() <= MAX_L3_ASSOC);
+            assert(timeForNextAccessL3.size() <= MAX_L3_ASSOC);
         }
     public:
         ull cold_misses;
@@ -362,7 +370,7 @@ class BeladyCacheFully : public Cache {
             for (int k=0; k<numtraces; k++) {
                 sprintf(input_name, "traces/%s_%d", argv[1], k);
                 fp = fopen(input_name, "rb");
-                std::cout << input_name << "\n";
+                // std::cout << input_name << "\n";
                 assert(fp != NULL);
 
                 while (!feof(fp)) {

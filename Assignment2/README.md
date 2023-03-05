@@ -1,0 +1,1 @@
+For instructions to run code, please refer to mainak's homepage. He has setup instructions to test it. The above code has been tested on pthread.c file present on mainak's homepage. Format of output file is self explanatory.

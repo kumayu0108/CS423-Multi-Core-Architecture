@@ -4,6 +4,7 @@
 
 #define ull unsigned long long
 #define blk_sz ((ull)64)
+#define log_lag 1000000
 
 FILE * trace;
 PIN_LOCK pinLock;
@@ -26,7 +27,10 @@ inline void upd_mdata(ull addr, int tid) {
     mdata.tla[blk_id] = mdata.time; // log this for lru cache simulation and access distance.
     mdata.tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
     mdata.time++; // increase time for each access to compute distances correctly.
-    fprintf(trace, "updating metadata w %llu, %d\n", addr, tid);
+    if(mdata.time % log_lag== 0) {
+        fprintf(trace, "updating metadata w %20llu, %2d, TIME: %10llu\n", addr, tid, mdata.time/log_lag);
+        fflush(trace);
+    }
     return;
 }
 void log_bdry(ull addr, ull size, int tid) {
@@ -49,12 +53,13 @@ void log_bdry(ull addr, ull size, int tid) {
 VOID log(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     PIN_GetLock(&pinLock, tid + 1);
 
-    fprintf(trace, "calling log w %llu, %lu, %d\n", (ull)addr_p, size, tid);
     ull addr = (ull)addr_p;
     ull start_blk = addr / blk_sz;
     ull end_blk = (addr + size)/ blk_sz;
     if(start_blk == end_blk){ // to the same block, no complex logic required.
         log_bdry(addr, size, (int)tid);
+        fflush(trace);
+        PIN_ReleaseLock(&pinLock);
         return;
     }
     ull start_acc = (start_blk + 1) * blk_sz - addr; // write until block boundary.
@@ -117,12 +122,15 @@ VOID Fini(INT32 code, VOID *v)
     // number of set bits for each entry, and add it. minimum number 1, maximum 8;
     for(auto x: mdata.tshare)
         arr[__builtin_popcount(x.second)]++;
+    for(auto x: mdata.adis) // log access distance and parse it later
+        fprintf(trace, "Access Distance: %5llu, Times: %5llu\n", x.first, x.second);
     for(int i = 0; i < 9; i++) {
         tot_acc+=arr[i];
         fprintf(trace, "blocks touched by %d threads is %llu\n", i, arr[i]);
     }
-    assert(mdata.time == tot_acc);
     fclose(trace);
+    assert(tot_acc == mdata.tla.size());
+    assert(mdata.tshare.size() == mdata.tla.size());
 }
 
 /* ===================================================================== */

@@ -140,7 +140,7 @@ VOID Fini(INT32 code, VOID *v)
     }
     // printf("\nMax Dis: %llu ; accesses : %llu\n", mdata.adis.rbegin()->first, mdata.adis.rbegin()->second);
     for(auto x: logDis){ // log access distance and parse it later
-       fprintf(trace, "Access Distance: %5f, Times: %5llu\n", x.first, x.second);
+       fprintf(trace, "Access Distance (LOG): %5f, Times: %5llu\n", x.first, x.second);
     }
     for(int i = 0; i < 9; i++) {
         tot_acc+=arr[i];

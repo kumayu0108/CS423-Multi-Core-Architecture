@@ -24,23 +24,42 @@ constexpr ull MAX_L3_ASSOC = 32768;
 FILE * trace;
 PIN_LOCK pinLock;
 
-static struct __data {
+struct __data {
     std::unordered_map<ull, unsigned long> tla; // maps time of last access of a block.
-    // std::unordered_map<ull, int> tshare; // each block to a 8 bit vector to see log if thread touches it.
+    std::unordered_map<ull, int> tshare; // each block to a 8 bit vector to see log if thread touches it.
     std::unordered_map<ull, unsigned long> adis; // maps access distance to number of times that distance occurs.
     ull time = 0; // added bonus, time at end of simulation is total machine accesses
-} mdata;
+};
 
+inline void upd_mdata(__data& mdata, ull addr, int tid) {
+    ull blk_id = addr / blk_sz;
+    // if previous entry exists, log access distance too.
+    if(mdata.tla.find(blk_id) != mdata.tla.end())
+        mdata.adis[mdata.time - mdata.tla[blk_id]]++; // initialise to zero if not present, increment it too.
+    mdata.tla[blk_id] = mdata.time; // log this for lru cache simulation and access distance.
+    mdata.tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
+    mdata.time++; // increase time for each access to compute distances correctly.
+
+#ifdef LOG_DATA
+    if(mdata.time % log_lag== 0) {
+        fprintf(trace, "updating metadata w %20llu, %2d, TIME: %10llu\n", addr, tid, mdata.time/log_lag);
+        fflush(trace);
+    }
+#endif
+
+    return;
+}
 
 class Cache{
     public:
         ull l3_hits, l3_misses;
+        __data cache_mdata;
         Cache():
             l3_hits(0), l3_misses(0),
             L3(L3_SETS),
             timeBlockAddedL3(L3_SETS) {}
 
-        void simulator(ull addr) {
+        void simulator(ull addr, int tid) {
             addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
             auto set_tag_l3 = decode_address(addr);
             auto setL3 = set_tag_l3.first, tagL3 = set_tag_l3.second;
@@ -54,12 +73,7 @@ class Cache{
             else {
                 bring_from_memory(addr, setL3, tagL3);
                 // only updating metadata for miss traces
-                ull blk_id = addr / blk_sz;
-                // if previous entry exists, log access distance too.
-                if(mdata.tla.find(blk_id) != mdata.tla.end())
-                    mdata.adis[mdata.time - mdata.tla[blk_id]]++; // initialise to zero if not present, increment it too.
-                mdata.tla[blk_id] = mdata.time; // log this for lru cache simulation and access distance.
-                mdata.time++; // increase time for each access to compute distances correctly.
+                upd_mdata(cache_mdata, addr, tid);
             }
         }
     private:
@@ -115,22 +129,15 @@ class Cache{
 Cache cache;
 // write any size, any addr, as much as you want wrt 1, 2, 4, 8 bytes.
 // Should handle 0 byte writes correctly;
-inline VOID upd_mdata(ull addr, int tid) {
-    cache.simulator(addr);
-
-#ifdef LOG_DATA
-    if(mdata.time % log_lag== 0) {
-        fprintf(trace, "updating metadata w %20llu, %2d, TIME: %10llu\n", addr, tid, mdata.time/log_lag);
-        fflush(trace);
-    }
-#endif
-
+inline VOID log_metrics(ull addr, int tid) {
+    cache.simulator(addr, tid);
+    // TODO: while merging files, add upd_mdata for global mdata.
     return;
 }
 inline VOID log_bdry(ull addr, ull size, int tid) {
     while(size >> 3 != 0) {
         // traverse in multiples of 8 until size < 8.
-        upd_mdata(addr, tid);
+        log_metrics(addr, tid);
         addr+=8; size-=8;
     }
     if(size == 0) return; // help branch prediction? idk. most of sizes are 8 bytes.
@@ -140,7 +147,7 @@ inline VOID log_bdry(ull addr, ull size, int tid) {
 #ifdef LOG_DATA
             assert(size != 0);
 #endif
-            upd_mdata(addr, tid);
+            log_metrics(addr, tid);
             addr+=i; size-=i;
         }
     }
@@ -152,7 +159,7 @@ VOID log_mem(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     ull start_blk = addr / blk_sz;
     ull end_blk = (addr + size)/ blk_sz;
     PIN_GetLock(&pinLock, tid + 1);
-    
+
     if(start_blk == end_blk){ // to the same block, no complex logic required.
         log_bdry(addr, size, (int)tid);
         PIN_ReleaseLock(&pinLock);
@@ -217,12 +224,12 @@ VOID Fini(INT32 code, VOID *v)
 {
     // ull arr[9] = {(ull)0};
     // ull tot_acc = 0;
-    fprintf(trace, "total machine accesses: %llu\n", mdata.time);
+    fprintf(trace, "total machine accesses: %llu\n", cache.cache_mdata.time);
     // number of set bits for each entry, and add it. minimum number 1, maximum 8;
     // for(auto x: mdata.tshare)
     //     arr[__builtin_popcount(x.second)]++;
     std::map <float, ull> logDis;
-    for(auto x: mdata.adis){ // convert access distance into log base 10 with 2 decimal rounding
+    for(auto x: cache.cache_mdata.adis){ // convert access distance into log base 10 with 2 decimal rounding
         logDis[(((float)((ll)(log10(x.first) * 100)))/100)] += x.second;
     }
     // printf("\nMax Dis: %llu ; accesses : %llu\n", mdata.adis.rbegin()->first, mdata.adis.rbegin()->second);

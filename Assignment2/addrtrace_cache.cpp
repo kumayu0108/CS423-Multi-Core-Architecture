@@ -11,9 +11,10 @@
 #define blk_sz ((ull)64)
 #define log_lag 1000000
 #define LOG_DATA 1        // uncomment to log data
+#define APPLY_ASSERTS 1   // uncomment to apply asserts
 //defines a cache block. contains a tag and a valid bit.
 #define blk std::pair<ull, bool>
-#define timeTag std::pair<ull, ull>
+#define timeTag std::pair<unsigned long, ull>
 constexpr int LOG_BLOCK_SIZE = 6;
 constexpr int L3_SETS = 2048;
 constexpr int NUM_L3_TAGS = 16;
@@ -24,36 +25,54 @@ constexpr ull MAX_L3_ASSOC = 32768;
 FILE * trace;
 PIN_LOCK pinLock;
 
-struct __data {
+struct MetaData {
     std::unordered_map<ull, unsigned long> tla; // maps time of last access of a block.
     std::unordered_map<ull, int> tshare; // each block to a 8 bit vector to see log if thread touches it.
     std::unordered_map<ull, unsigned long> adis; // maps access distance to number of times that distance occurs.
     ull time = 0; // added bonus, time at end of simulation is total machine accesses
-};
 
-inline void upd_mdata(__data& mdata, ull addr, int tid) {
-    ull blk_id = addr / blk_sz;
-    // if previous entry exists, log access distance too.
-    if(mdata.tla.find(blk_id) != mdata.tla.end())
-        mdata.adis[mdata.time - mdata.tla[blk_id]]++; // initialise to zero if not present, increment it too.
-    mdata.tla[blk_id] = mdata.time; // log this for lru cache simulation and access distance.
-    mdata.tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
-    mdata.time++; // increase time for each access to compute distances correctly.
+    inline void update(ull addr, int tid, bool cache = false){
+        ull blk_id = addr / blk_sz;
+        // if previous entry exists, log access distance too.
+        if(tla.find(blk_id) != tla.end())
+            adis[time - tla[blk_id]]++; // initialise to zero if not present, increment it too.
+        tla[blk_id] = time; // log this for lru cache simulation and access distance.
+        if(!cache)
+            tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
+        time++; // increase time for each access to compute distances correctly.
 
 #ifdef LOG_DATA
-    if(mdata.time % log_lag== 0) {
-        fprintf(trace, "updating metadata w %20llu, %2d, TIME: %10llu\n", addr, tid, mdata.time/log_lag);
-        fflush(trace);
-    }
+        if(time % log_lag== 0) {
+            fprintf(trace, "updating metadata w %20llu, %2d, TIME: %10llu\n", addr, tid, time/log_lag);
+            fflush(trace);
+        }
 #endif
+    }
+} globalMData;
 
-    return;
-}
+// inline void upd_mdata(MetaData& mdata, ull addr, int tid) {
+//     ull blk_id = addr / blk_sz;
+//     // if previous entry exists, log access distance too.
+//     if(mdata.tla.find(blk_id) != mdata.tla.end())
+//         mdata.adis[mdata.time - mdata.tla[blk_id]]++; // initialise to zero if not present, increment it too.
+//     mdata.tla[blk_id] = mdata.time; // log this for lru cache simulation and access distance.
+//     mdata.tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
+//     mdata.time++; // increase time for each access to compute distances correctly.
+
+// #ifdef LOG_DATA
+//     if(mdata.time % log_lag== 0) {
+//         fprintf(trace, "updating metadata w %20llu, %2d, TIME: %10llu\n", addr, tid, mdata.time/log_lag);
+//         fflush(trace);
+//     }
+// #endif
+
+//     return;
+// }
 
 class Cache{
     public:
         ull l3_hits, l3_misses;
-        __data cache_mdata;
+        MetaData cache_mdata;
         Cache():
             l3_hits(0), l3_misses(0),
             L3(L3_SETS),
@@ -63,7 +82,7 @@ class Cache{
             addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
             auto set_tag_l3 = decode_address(addr);
             auto setL3 = set_tag_l3.first, tagL3 = set_tag_l3.second;
-#ifdef LOG_DATA
+#ifdef APPLY_ASSERTS
             assert(L3[setL3].size() == timeBlockAddedL3[setL3].size());
 #endif
             if(check_in_cache(setL3, tagL3)){
@@ -72,13 +91,18 @@ class Cache{
             }
             else {
                 bring_from_memory(addr, setL3, tagL3);
+#ifdef LOG_DATA
+                if((cache_mdata.time +  1) % log_lag== 0) {
+                    fprintf(trace, "Cache : ");
+                }
+#endif
                 // only updating metadata for miss traces
-                upd_mdata(cache_mdata, addr, tid);
+                cache_mdata.update(addr, tid, true);
             }
         }
     private:
-        std::vector <std::unordered_map<ull, ull>> L3; // tag -> ull, active? -> bool
-        std::vector <std::set<timeTag>> timeBlockAddedL3; // stores time and -> for eviction.
+        std::vector <std::unordered_map<ull, ull>> L3; // tag -> time map
+        std::vector <std::set<timeTag>> timeBlockAddedL3; // stores time and tag for eviction.
 
         void bring_from_memory(ull addr, ull setL3, ull tagL3){
             l3_misses++;
@@ -86,22 +110,21 @@ class Cache{
         }
         // given a certain set, it uses LRU policy to replace cache block.
         //returns address evicted, along with a bool denoting if it actually existed or if it was an empty slot.
-        blk replace(ull st, ull tag){
-            //find first invalid block, fill it, return.
-            blk retBlock = {0, false};
+        void replace(ull st, ull tag){
             // calculate index of minimum timestamp for LRU replacement.
             // all blocks are valid, so we're actually evicting an existing block.
             if(L3[st].size() == NUM_L3_TAGS){
-                retBlock.second = true;
                 auto tmTag = *timeBlockAddedL3[st].begin();
-                //get address evicted.
-                retBlock.first = get_addr(st, tmTag.second);
                 L3[st].erase(tmTag.second);
                 timeBlockAddedL3[st].erase(tmTag);
+#ifdef APPLY_ASSERTS
+                assert(tmTag.first < (timeBlockAddedL3[st].begin()->first));
+                assert(L3[st].size() == NUM_L3_TAGS - 1);
+                assert(timeBlockAddedL3[st].size() == NUM_L3_TAGS - 1);
+#endif
             }
             L3[st][tag] = (timeBlockAddedL3[st].empty() ? 0 : (timeBlockAddedL3[st].rbegin()->first)) + 1;
             timeBlockAddedL3[st].insert({L3[st][tag], tag});
-            return retBlock;
         }
         //helper function for decoding addresses
         std::pair<ull, ull> decode_address(ull addr){
@@ -122,6 +145,9 @@ class Cache{
         void update_priority(ull st, ull tag){
             ull nwTime = (timeBlockAddedL3[st].rbegin()->first) + 1;
             timeBlockAddedL3[st].erase({L3[st][tag], tag});
+#ifdef APPLY_ASSERTS
+            assert(L3[st][tag] < nwTime);
+#endif
             L3[st][tag] = nwTime;
             timeBlockAddedL3[st].insert({nwTime, tag});
         }
@@ -132,6 +158,7 @@ Cache cache;
 inline VOID log_metrics(ull addr, int tid) {
     cache.simulator(addr, tid);
     // TODO: while merging files, add upd_mdata for global mdata.
+    globalMData.update(addr, tid);
     return;
 }
 inline VOID log_bdry(ull addr, ull size, int tid) {
@@ -144,7 +171,7 @@ inline VOID log_bdry(ull addr, ull size, int tid) {
     for(int i = 4; i > 0; i>>=1) {
         if(size / i != 0) {
         // checking only once because (size / i) <= 1 at every iteration.
-#ifdef LOG_DATA
+#ifdef APPLY_ASSERTS
             assert(size != 0);
 #endif
             log_metrics(addr, tid);
@@ -167,7 +194,7 @@ VOID log_mem(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     }
     ull start_acc = (start_blk + 1) * blk_sz - addr; // write until block boundary.
     ull end_acc = addr + size - (end_blk * blk_sz); // bytes to be written at last;
-#ifdef LOG_DATA
+#ifdef APPLY_ASSERTS
     assert((addr + start_acc) % blk_sz == 0);
     assert((addr + size - end_acc) % blk_sz == 0);
 #endif
@@ -175,7 +202,7 @@ VOID log_mem(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     log_bdry(addr, start_acc, (int)tid);
     addr = (start_blk + 1) * blk_sz;
     size -= (start_acc + end_acc); // size should be a multiple of blk_sz now
-#ifdef LOG_DATA
+#ifdef APPLY_ASSERTS
     assert(size % blk_sz == 0);
 #endif
     log_bdry(addr, size, (int)tid);
@@ -222,28 +249,36 @@ VOID Instruction(INS ins, VOID *v)
 // This function is called when the application exits
 VOID Fini(INT32 code, VOID *v)
 {
-    // ull arr[9] = {(ull)0};
-    // ull tot_acc = 0;
+    ull arr[9] = {(ull)0};
+    ull tot_acc = 0;
     fprintf(trace, "total machine accesses: %llu\n", cache.cache_mdata.time);
     // number of set bits for each entry, and add it. minimum number 1, maximum 8;
-    // for(auto x: mdata.tshare)
-    //     arr[__builtin_popcount(x.second)]++;
-    std::map <float, ull> logDis;
+    for(auto x: globalMData.tshare)
+        arr[__builtin_popcount(x.second)]++;
+    for(int i = 0; i < 9; i++) {
+        tot_acc+=arr[i];
+        fprintf(trace, "blocks touched by %d threads is %llu\n", i, arr[i]);
+    }
+
+    std::map <float, ull> globalLogDis, cacheLogDis;
+    for(auto x: globalMData.adis){ // convert access distance into log base 10 with 2 decimal rounding
+        globalLogDis[(((float)((ll)(log10(x.first) * 100)))/100)] += x.second;
+    }
     for(auto x: cache.cache_mdata.adis){ // convert access distance into log base 10 with 2 decimal rounding
-        logDis[(((float)((ll)(log10(x.first) * 100)))/100)] += x.second;
+        cacheLogDis[(((float)((ll)(log10(x.first) * 100)))/100)] += x.second;
     }
     // printf("\nMax Dis: %llu ; accesses : %llu\n", mdata.adis.rbegin()->first, mdata.adis.rbegin()->second);
-    for(auto x: logDis){ // log access distance and parse it later
-       fprintf(trace, "Access Distance (LOG): %5f, Times: %5llu\n", x.first, x.second);
+    for(auto x: globalLogDis){ // log access distance and parse it later
+       fprintf(trace, "Global Access Distance (LOG): %5f, Times: %5llu\n", x.first, x.second);
     }
-    // for(int i = 0; i < 9; i++) {
-    //     tot_acc+=arr[i];
-    //     fprintf(trace, "blocks touched by %d threads is %llu\n", i, arr[i]);
-    // }
+    fprintf(trace, "______________________________________________________\n");
+    for(auto x: cacheLogDis){ // log access distance and parse it later
+       fprintf(trace, "Cache Access Distance (LOG): %5f, Times: %5llu\n", x.first, x.second);
+    }
     fclose(trace);
-#ifdef LOG_DATA
-    // assert(tot_acc == mdata.tla.size());
-    // assert(mdata.tshare.size() == mdata.tla.size());
+#ifdef APPLY_ASSERTS
+    assert(tot_acc == globalMData.tla.size());
+    assert(globalMData.tshare.size() == globalMData.tla.size());
 #endif
 }
 

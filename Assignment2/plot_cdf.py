@@ -2,20 +2,35 @@ import re
 import matplotlib.pyplot as plt
 
 file1 = open('addrtrace.out', 'r')  
-totalAcc = 0
-distanceMap = {}
+totalAccGlobal, totalAccCache = 0, 0
+distanceMapGlobal, distanceMapCache = {}, {}
 while True:
     line = file1.readline()
     if not line:
         break
-    if not line.startswith("Access"):
-        continue
-    matches = re.findall("[\d\.]+", line)
-    totalAcc += int(matches[1])
-    distanceMap[float(matches[0])] = totalAcc
-    print("{}".format(line.strip()), float(matches[0]), distanceMap[float(matches[0])])
+    if line.startswith("Global"):
+        matches = re.findall("[\d\.]+", line)
+        totalAccGlobal += int(matches[1])
+        distanceMapGlobal[float(matches[0])] = totalAccGlobal
+        print("{}".format(line.strip()), float(matches[0]), distanceMapGlobal[float(matches[0])])
+    elif line.startswith("Cache"):
+        matches = re.findall("[\d\.]+", line)
+        totalAccCache += int(matches[1])
+        distanceMapCache[float(matches[0])] = totalAccCache
+        print("{}".format(line.strip()), float(matches[0]), distanceMapCache[float(matches[0])])
 plt.figure(figsize=(10, 6))
-plt.plot(distanceMap.keys(), distanceMap.values())
-plt.title("cumulative density function for access distances")
+plt.plot(distanceMapGlobal.keys(), distanceMapGlobal.values())
+plt.title("cumulative density function for access distances (global)")
 plt.grid(True)
-plt.savefig("CDF_prog1")
+plt.savefig("CDF_prog1_global")
+
+plt.plot(distanceMapCache.keys(), distanceMapCache.values())
+plt.title("cumulative density function for access distances (both)")
+plt.grid(True)
+plt.savefig("CDF_prog1_both")
+
+plt.clf()
+plt.plot(distanceMapCache.keys(), distanceMapCache.values())
+plt.title("cumulative density function for access distances (cache)")
+plt.grid(True)
+plt.savefig("CDF_prog1_cache")

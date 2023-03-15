@@ -10,8 +10,8 @@
 #define ull unsigned ll
 #define blk_sz ((ull)64)
 #define log_lag 1000000
-#define LOG_DATA 1        // uncomment to log data
-#define APPLY_ASSERTS 1   // uncomment to apply asserts
+// #define LOG_DATA 1        // uncomment to log data
+// #define APPLY_ASSERTS 1   // uncomment to apply asserts
 //defines a cache block. contains a tag and a valid bit.
 #define blk std::pair<ull, bool>
 #define timeTag std::pair<unsigned long, ull>
@@ -84,6 +84,7 @@ class Cache{
             auto setL3 = set_tag_l3.first, tagL3 = set_tag_l3.second;
 #ifdef APPLY_ASSERTS
             assert(L3[setL3].size() == timeBlockAddedL3[setL3].size());
+            assert(L3[setL3].size() <= NUM_L3_TAGS);
 #endif
             if(check_in_cache(setL3, tagL3)){
                 l3_hits++;
@@ -93,7 +94,7 @@ class Cache{
                 bring_from_memory(addr, setL3, tagL3);
 #ifdef LOG_DATA
                 if((cache_mdata.time +  1) % log_lag== 0) {
-                    fprintf(trace, "Cache : ");
+                    fprintf(trace, " cache : ");
                 }
 #endif
                 // only updating metadata for miss traces

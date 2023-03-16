@@ -185,7 +185,7 @@ inline VOID log_bdry(ull addr, ull size, int tid) {
 VOID log_mem(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     ull addr = (ull)addr_p;
     ull start_blk = addr / blk_sz;
-    ull end_blk = (addr + size)/ blk_sz;
+    ull end_blk = (addr + size - 1)/ blk_sz;
     PIN_GetLock(&pinLock, tid + 1);
 
     if(start_blk == end_blk){ // to the same block, no complex logic required.
@@ -252,7 +252,7 @@ VOID Fini(INT32 code, VOID *v)
 {
     ull arr[9] = {(ull)0};
     ull tot_acc = 0;
-    fprintf(trace, "total machine accesses: %llu\n", cache.cache_mdata.time);
+    fprintf(trace, "total machine accesses: %llu\n", globalMData.time);
     // number of set bits for each entry, and add it. minimum number 1, maximum 8;
     for(auto x: globalMData.tshare)
         arr[__builtin_popcount(x.second)]++;
@@ -262,11 +262,11 @@ VOID Fini(INT32 code, VOID *v)
     }
 
     std::map <float, ull> globalLogDis, cacheLogDis;
-    for(auto x: globalMData.adis){ // convert access distance into log base 10 with 2 decimal rounding
-        globalLogDis[(((float)((ll)(log10(x.first) * 100)))/100)] += x.second;
+    for(auto x: globalMData.adis){ // convert access distance into log base 10 with 3 decimal rounding
+        globalLogDis[(((float)((ll)(log10(x.first) * 1000)))/1000)] += x.second;
     }
-    for(auto x: cache.cache_mdata.adis){ // convert access distance into log base 10 with 2 decimal rounding
-        cacheLogDis[(((float)((ll)(log10(x.first) * 100)))/100)] += x.second;
+    for(auto x: cache.cache_mdata.adis){ // convert access distance into log base 10 with 3 decimal rounding
+        cacheLogDis[(((float)((ll)(log10(x.first) * 1000)))/1000)] += x.second;
     }
     // printf("\nMax Dis: %llu ; accesses : %llu\n", mdata.adis.rbegin()->first, mdata.adis.rbegin()->second);
     for(auto x: globalLogDis){ // log access distance and parse it later

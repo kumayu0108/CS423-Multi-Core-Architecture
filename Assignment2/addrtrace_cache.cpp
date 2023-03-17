@@ -260,6 +260,7 @@ VOID Fini(INT32 code, VOID *v)
         tot_acc+=arr[i];
         fprintf(trace, "blocks touched by %d threads is %llu\n", i, arr[i]);
     }
+    fprintf(trace, "Total blocks touched is %llu\n", total_acc);
 
     std::map <float, ull> globalLogDis, cacheLogDis;
     for(auto x: globalMData.adis){ // convert access distance into log base 10 with 3 decimal rounding

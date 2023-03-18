@@ -1,7 +1,7 @@
 import re
 import matplotlib.pyplot as plt
 
-progName = "prog4"
+progName = "prog2"
 
 file1 = open('addrtrace.out', 'r')  
 totalAccGlobal, totalAccCache = 0, 0
@@ -20,10 +20,19 @@ while True:
         totalAccCache += int(matches[1])
         distanceMapCache[float(matches[0])] = totalAccCache
         # print("{}".format(line.strip()), float(matches[0]), distanceMapCache[float(matches[0])])
+
+for key in distanceMapGlobal.keys():
+    distanceMapGlobal[key] = distanceMapGlobal[key]/totalAccGlobal
+
+for key in distanceMapCache.keys():
+    distanceMapCache[key] = distanceMapCache[key]/totalAccCache
+
 plt.figure(figsize=(10, 6))
 plt.plot(distanceMapGlobal.keys(), distanceMapGlobal.values())
 plt.title("cumulative density function for access distances (global)")
 plt.grid(True)
+plt.xlabel("Distances (Log scale)")
+plt.ylabel("Number of accesses")
 plt.savefig("CDF_{}_global".format(progName))
 
 plt.plot(distanceMapCache.keys(), distanceMapCache.values())
@@ -34,5 +43,7 @@ plt.savefig("CDF_{}_both".format(progName))
 plt.clf()
 plt.plot(distanceMapCache.keys(), distanceMapCache.values())
 plt.title("cumulative density function for access distances (cache)")
+plt.xlabel("Distances (Log scale)")
+plt.ylabel("Number of accesses")
 plt.grid(True)
 plt.savefig("CDF_{}_cache".format(progName))

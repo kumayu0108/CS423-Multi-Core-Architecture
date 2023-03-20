@@ -30,6 +30,7 @@ struct MetaData {
     std::unordered_map<ull, int> tshare; // each block to a 8 bit vector to see log if thread touches it.
     std::unordered_map<ull, unsigned long> adis; // maps access distance to number of times that distance occurs.
     ull time = 0; // added bonus, time at end of simulation is total machine accesses
+    ull pref = 0; // incremented everytime there is a prefetch.
 
     inline void update(ull addr, int tid, bool cache = false){
         ull blk_id = addr / blk_sz;
@@ -212,6 +213,13 @@ VOID log_mem(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
 
     PIN_ReleaseLock(&pinLock);
 }
+
+VOID log_pref(VOID *ip, THREADID tid) {
+
+    PIN_GetLock(&pinLock, tid + 1);
+    globalMData.pref++;
+    PIN_ReleaseLock(&pinLock);
+}
 // Pin calls this function every time a new instruction is encountered
 VOID Instruction(INS ins, VOID *v)
 {
@@ -244,6 +252,14 @@ VOID Instruction(INS ins, VOID *v)
                 IARG_THREAD_ID,
                 IARG_END);
         }
+        if (INS_IsPrefetch(ins))
+        {
+            INS_InsertPredicatedCall(
+                ins, IPOINT_BEFORE, (AFUNPTR)log_pref,
+                IARG_INST_PTR,
+                IARG_THREAD_ID,
+                IARG_END);
+        }
     }
 
 }
@@ -253,6 +269,7 @@ VOID Fini(INT32 code, VOID *v)
     ull arr[9] = {(ull)0};
     ull tot_acc = 0;
     fprintf(trace, "total machine accesses: %llu\n", globalMData.time);
+    fprintf(trace, "total prefetch instructions : %llu\n", globalMData.pref);
     // number of set bits for each entry, and add it. minimum number 1, maximum 8;
     for(auto x: globalMData.tshare)
         arr[__builtin_popcount(x.second)]++;

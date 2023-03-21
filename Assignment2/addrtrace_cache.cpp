@@ -9,7 +9,8 @@
 #define ll long long
 #define ull unsigned ll
 #define blk_sz ((ull)64)
-#define log_lag 1000000
+#define log_lag 100000
+// #define CHECK_PREF 1
 // #define LOG_DATA 1        // uncomment to log data
 // #define APPLY_ASSERTS 1   // uncomment to apply asserts
 //defines a cache block. contains a tag and a valid bit.
@@ -30,7 +31,9 @@ struct MetaData {
     std::unordered_map<ull, int> tshare; // each block to a 8 bit vector to see log if thread touches it.
     std::unordered_map<ull, unsigned long> adis; // maps access distance to number of times that distance occurs.
     ull time = 0; // added bonus, time at end of simulation is total machine accesses
+#ifdef CHECK_PREF
     ull pref = 0; // incremented everytime there is a prefetch.
+#endif
 
     inline void update(ull addr, int tid, bool cache = false){
         ull blk_id = addr / blk_sz;
@@ -50,25 +53,6 @@ struct MetaData {
 #endif
     }
 } globalMData;
-
-// inline void upd_mdata(MetaData& mdata, ull addr, int tid) {
-//     ull blk_id = addr / blk_sz;
-//     // if previous entry exists, log access distance too.
-//     if(mdata.tla.find(blk_id) != mdata.tla.end())
-//         mdata.adis[mdata.time - mdata.tla[blk_id]]++; // initialise to zero if not present, increment it too.
-//     mdata.tla[blk_id] = mdata.time; // log this for lru cache simulation and access distance.
-//     mdata.tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
-//     mdata.time++; // increase time for each access to compute distances correctly.
-
-// #ifdef LOG_DATA
-//     if(mdata.time % log_lag== 0) {
-//         fprintf(trace, "updating metadata w %20llu, %2d, TIME: %10llu\n", addr, tid, mdata.time/log_lag);
-//         fflush(trace);
-//     }
-// #endif
-
-//     return;
-// }
 
 class Cache{
     public:
@@ -95,7 +79,7 @@ class Cache{
                 bring_from_memory(addr, setL3, tagL3);
 #ifdef LOG_DATA
                 if((cache_mdata.time +  1) % log_lag== 0) {
-                    fprintf(trace, " cache : ");
+                    fprintf(trace, "cache : ");
                 }
 #endif
                 // only updating metadata for miss traces
@@ -158,8 +142,17 @@ Cache cache;
 // write any size, any addr, as much as you want wrt 1, 2, 4, 8 bytes.
 // Should handle 0 byte writes correctly;
 inline VOID log_metrics(ull addr, int tid) {
+#ifdef LOG_DATA
+    if((cache.cache_mdata.time +  1) % log_lag == 0 or (globalMData.time + 1) % log_lag == 0) {
+        fprintf(trace, "TID: %d ", tid);
+    }
+#endif
     cache.simulator(addr, tid);
-    // TODO: while merging files, add upd_mdata for global mdata.
+#ifdef LOG_DATA
+    if((globalMData.time + 1) % log_lag == 0){
+        fprintf(trace, "global:");
+    }
+#endif
     globalMData.update(addr, tid);
     return;
 }
@@ -214,12 +207,15 @@ VOID log_mem(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     PIN_ReleaseLock(&pinLock);
 }
 
+#ifdef CHECK_PREF
 VOID log_pref(VOID *ip, THREADID tid) {
 
     PIN_GetLock(&pinLock, tid + 1);
     globalMData.pref++;
     PIN_ReleaseLock(&pinLock);
 }
+#endif
+
 // Pin calls this function every time a new instruction is encountered
 VOID Instruction(INS ins, VOID *v)
 {
@@ -252,15 +248,17 @@ VOID Instruction(INS ins, VOID *v)
                 IARG_THREAD_ID,
                 IARG_END);
         }
-        if (INS_IsPrefetch(ins))
-        {
-            INS_InsertPredicatedCall(
-                ins, IPOINT_BEFORE, (AFUNPTR)log_pref,
-                IARG_INST_PTR,
-                IARG_THREAD_ID,
-                IARG_END);
-        }
     }
+#ifdef CHECK_PREF 
+    if (INS_IsPrefetch(ins))
+    {
+        INS_InsertPredicatedCall(
+            ins, IPOINT_BEFORE, (AFUNPTR)log_pref,
+            IARG_INST_PTR,
+            IARG_THREAD_ID,
+            IARG_END);
+    }
+#endif
 
 }
 // This function is called when the application exits
@@ -269,7 +267,9 @@ VOID Fini(INT32 code, VOID *v)
     ull arr[9] = {(ull)0};
     ull tot_acc = 0;
     fprintf(trace, "total machine accesses: %llu\n", globalMData.time);
+#ifdef CHECK_PREF
     fprintf(trace, "total prefetch instructions : %llu\n", globalMData.pref);
+#endif
     // number of set bits for each entry, and add it. minimum number 1, maximum 8;
     for(auto x: globalMData.tshare)
         arr[__builtin_popcount(x.second)]++;

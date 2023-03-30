@@ -8,4 +8,5 @@ cache
 *.exe
 *.out
 
+*.pdf
 tmp*

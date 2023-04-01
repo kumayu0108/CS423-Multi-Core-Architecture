@@ -11,25 +11,31 @@
 #define ull unsigned ll
 #define blk_sz ((ull)64)
 //defines a cache block. contains a tag and a valid bit.
-#define blk std::pair<ull, bool>
-#define timeTag std::pair<unsigned long, ull>
-constexpr int LOG_BLOCK_SIZE = 6;
-constexpr int L3_SETS = 2048;
-constexpr int NUM_L3_TAGS = 16;
-constexpr int LOG_L3_SETS = 11;
-constexpr ull L3_SET_BITS = 0x7ff;
-constexpr ull MAX_L3_ASSOC = 32768;
+// #define blk std::pair<ull, bool>
+// #define timeTag std::pair<unsigned long, ull>
+// constexpr int LOG_BLOCK_SIZE = 6;
+// constexpr int L3_SETS = 2048;
+// constexpr int NUM_L3_TAGS = 16;
+// constexpr int LOG_L3_SETS = 11;
+// constexpr ull L3_SET_BITS = 0x7ff;
+// constexpr ull MAX_L3_ASSOC = 32768;
 constexpr int MAX_PROC = 64;
 
 int trace[MAX_PROC];
 PIN_LOCK pinLock;
 
 struct MetaData {
+    struct logStruct {
+        bool is_store;
+        unsigned int time;
+        ull blk_id;
+    };
     std::unordered_map<ull, unsigned long> tla; // maps time of last access of a block.
     std::unordered_map<ull, int> tshare; // each block to a 8 bit vector to see log if thread touches it.
     std::unordered_map<ull, unsigned long> adis; // maps access distance to number of times that distance occurs.
+    bool is_store; // boolean; tells if the current machine access is a store or not
     unsigned int time = 0; // added bonus, time at end of simulation is total machine accesses
-    std::vector <std::pair<unsigned int, ull>> logData[MAX_PROC];
+    std::vector <logStruct> logData[MAX_PROC];
 
     inline void update(ull addr, int tid, bool cache = false){
         ull blk_id = addr / blk_sz;
@@ -39,81 +45,81 @@ struct MetaData {
         tla[blk_id] = time; // log this for lru cache simulation and access distance.
         if(!cache)
             tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
-        logData[tid].push_back({time, blk_id});
+        logData[tid].push_back({is_store, time, blk_id});
         time++; // increase time for each access to compute distances correctly.
         // write(trace[tid], &blk_id, sizeof(ull));
         // write(trace[tid], &time, sizeof(unsigned int));
     }
 } globalMData;
 
-class Cache{
-    public:
-        ull l3_hits, l3_misses;
-        MetaData cache_mdata;
-        Cache():
-            l3_hits(0), l3_misses(0),
-            L3(L3_SETS),
-            timeBlockAddedL3(L3_SETS) {}
+// class Cache{
+//     public:
+//         ull l3_hits, l3_misses;
+//         MetaData cache_mdata;
+//         Cache():
+//             l3_hits(0), l3_misses(0),
+//             L3(L3_SETS),
+//             timeBlockAddedL3(L3_SETS) {}
 
-        void simulator(ull addr, int tid) {
-            addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
-            auto set_tag_l3 = decode_address(addr);
-            auto setL3 = set_tag_l3.first, tagL3 = set_tag_l3.second;
-            if(check_in_cache(setL3, tagL3)){
-                l3_hits++;
-                update_priority(setL3, tagL3);
-            }
-            else {
-                bring_from_memory(addr, setL3, tagL3);
-                // only updating metadata for miss traces
-                cache_mdata.update(addr, tid, true);
-            }
-        }
-    private:
-        std::vector <std::unordered_map<ull, ull>> L3; // tag -> time map
-        std::vector <std::set<timeTag>> timeBlockAddedL3; // stores time and tag for eviction.
+//         void simulator(ull addr, int tid) {
+//             addr = ((addr >> LOG_BLOCK_SIZE) << LOG_BLOCK_SIZE);
+//             auto set_tag_l3 = decode_address(addr);
+//             auto setL3 = set_tag_l3.first, tagL3 = set_tag_l3.second;
+//             if(check_in_cache(setL3, tagL3)){
+//                 l3_hits++;
+//                 update_priority(setL3, tagL3);
+//             }
+//             else {
+//                 bring_from_memory(addr, setL3, tagL3);
+//                 // only updating metadata for miss traces
+//                 cache_mdata.update(addr, tid, true);
+//             }
+//         }
+//     private:
+//         std::vector <std::unordered_map<ull, ull>> L3; // tag -> time map
+//         std::vector <std::set<timeTag>> timeBlockAddedL3; // stores time and tag for eviction.
 
-        void bring_from_memory(ull addr, ull setL3, ull tagL3){
-            l3_misses++;
-            replace(setL3, tagL3);
-        }
-        // given a certain set, it uses LRU policy to replace cache block.
-        //returns address evicted, along with a bool denoting if it actually existed or if it was an empty slot.
-        void replace(ull st, ull tag){
-            // calculate index of minimum timestamp for LRU replacement.
-            // all blocks are valid, so we're actually evicting an existing block.
-            if(L3[st].size() == NUM_L3_TAGS){
-                auto tmTag = *timeBlockAddedL3[st].begin();
-                L3[st].erase(tmTag.second);
-                timeBlockAddedL3[st].erase(tmTag);
-            }
-            L3[st][tag] = (timeBlockAddedL3[st].empty() ? 0 : (timeBlockAddedL3[st].rbegin()->first)) + 1;
-            timeBlockAddedL3[st].insert({L3[st][tag], tag});
-        }
-        //helper function for decoding addresses
-        std::pair<ull, ull> decode_address(ull addr){
-            ull st = (addr >> LOG_BLOCK_SIZE) & L3_SET_BITS;
-            ull tag = (addr >> (LOG_BLOCK_SIZE + LOG_L3_SETS));
-            return std::pair<ull, ull>(st, tag);
-        }
-        // returns tag index in current set if found & is valid. Else returns -1
-        bool check_in_cache(ull st, ull tag){
-            if(L3[st].find(tag) != L3[st].end()){return true;}
-            return false;
-        }
-        //helper function to get address from set and tag bits
-        ull get_addr(ull st, ull tag){
-            return ((tag << (LOG_BLOCK_SIZE + LOG_L3_SETS)) | (st << LOG_BLOCK_SIZE));
-        }
-        // updates LRU list of times.
-        void update_priority(ull st, ull tag){
-            ull nwTime = (timeBlockAddedL3[st].rbegin()->first) + 1;
-            timeBlockAddedL3[st].erase({L3[st][tag], tag});
-            L3[st][tag] = nwTime;
-            timeBlockAddedL3[st].insert({nwTime, tag});
-        }
-};
-Cache cache;
+//         void bring_from_memory(ull addr, ull setL3, ull tagL3){
+//             l3_misses++;
+//             replace(setL3, tagL3);
+//         }
+//         // given a certain set, it uses LRU policy to replace cache block.
+//         //returns address evicted, along with a bool denoting if it actually existed or if it was an empty slot.
+//         void replace(ull st, ull tag){
+//             // calculate index of minimum timestamp for LRU replacement.
+//             // all blocks are valid, so we're actually evicting an existing block.
+//             if(L3[st].size() == NUM_L3_TAGS){
+//                 auto tmTag = *timeBlockAddedL3[st].begin();
+//                 L3[st].erase(tmTag.second);
+//                 timeBlockAddedL3[st].erase(tmTag);
+//             }
+//             L3[st][tag] = (timeBlockAddedL3[st].empty() ? 0 : (timeBlockAddedL3[st].rbegin()->first)) + 1;
+//             timeBlockAddedL3[st].insert({L3[st][tag], tag});
+//         }
+//         //helper function for decoding addresses
+//         std::pair<ull, ull> decode_address(ull addr){
+//             ull st = (addr >> LOG_BLOCK_SIZE) & L3_SET_BITS;
+//             ull tag = (addr >> (LOG_BLOCK_SIZE + LOG_L3_SETS));
+//             return std::pair<ull, ull>(st, tag);
+//         }
+//         // returns tag index in current set if found & is valid. Else returns -1
+//         bool check_in_cache(ull st, ull tag){
+//             if(L3[st].find(tag) != L3[st].end()){return true;}
+//             return false;
+//         }
+//         //helper function to get address from set and tag bits
+//         ull get_addr(ull st, ull tag){
+//             return ((tag << (LOG_BLOCK_SIZE + LOG_L3_SETS)) | (st << LOG_BLOCK_SIZE));
+//         }
+//         // updates LRU list of times.
+//         void update_priority(ull st, ull tag){
+//             ull nwTime = (timeBlockAddedL3[st].rbegin()->first) + 1;
+//             timeBlockAddedL3[st].erase({L3[st][tag], tag});
+//             L3[st][tag] = nwTime;
+//             timeBlockAddedL3[st].insert({nwTime, tag});
+//         }
+// };
+// Cache cache;
 // write any size, any addr, as much as you want wrt 1, 2, 4, 8 bytes.
 // Should handle 0 byte writes correctly;
 inline VOID log_metrics(ull addr, int tid) {
@@ -138,12 +144,36 @@ inline VOID log_bdry(ull addr, ull size, int tid) {
     return;
 }
 
-VOID log_mem(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
+VOID log_mem_load(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     ull addr = (ull)addr_p;
     ull start_blk = addr / blk_sz;
     ull end_blk = (addr + size - 1)/ blk_sz;
     PIN_GetLock(&pinLock, tid + 1);
+    globalMData.is_store = false;
+    if(start_blk == end_blk){ // to the same block, no complex logic required.
+        log_bdry(addr, size, (int)tid);
+        PIN_ReleaseLock(&pinLock);
+        return;
+    }
+    ull start_acc = (start_blk + 1) * blk_sz - addr; // write until block boundary.
+    ull end_acc = addr + size - (end_blk * blk_sz); // bytes to be written at last;
 
+    log_bdry(addr, start_acc, (int)tid);
+    addr = (start_blk + 1) * blk_sz;
+    size -= (start_acc + end_acc); // size should be a multiple of blk_sz now
+    log_bdry(addr, size, (int)tid);
+    addr+=size;
+    log_bdry(addr, end_acc, (int)tid);
+
+    PIN_ReleaseLock(&pinLock);
+}
+
+VOID log_mem_store(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
+    ull addr = (ull)addr_p;
+    ull start_blk = addr / blk_sz;
+    ull end_blk = (addr + size - 1)/ blk_sz;
+    PIN_GetLock(&pinLock, tid + 1);
+    globalMData.is_store = true;
     if(start_blk == end_blk){ // to the same block, no complex logic required.
         log_bdry(addr, size, (int)tid);
         PIN_ReleaseLock(&pinLock);
@@ -176,7 +206,7 @@ VOID Instruction(INS ins, VOID *v)
         {
             UINT64 memSize = INS_MemoryOperandSize(ins, memOp);
             INS_InsertPredicatedCall(
-                ins, IPOINT_BEFORE, (AFUNPTR)log_mem,
+                ins, IPOINT_BEFORE, (AFUNPTR)log_mem_load,
                 IARG_INST_PTR,
                 IARG_MEMORYOP_EA, memOp,
                 IARG_UINT64, memSize,
@@ -187,7 +217,7 @@ VOID Instruction(INS ins, VOID *v)
         {
             UINT64 memSize = INS_MemoryOperandSize(ins, memOp);
             INS_InsertPredicatedCall(
-                ins, IPOINT_BEFORE, (AFUNPTR)log_mem,
+                ins, IPOINT_BEFORE, (AFUNPTR)log_mem_store,
                 IARG_INST_PTR,
                 IARG_MEMORYOP_EA, memOp,
                 IARG_UINT64, memSize,
@@ -223,8 +253,10 @@ VOID Fini(INT32 code, VOID *v)
     // }
     // fprintf(trace, "Total blocks touched is %llu\n", tot_acc);
 
-    for(int i = 0; i < MAX_PROC; i++)
-        write(trace[i], &globalMData.logData[i][0], globalMData.logData[i].size() * sizeof(std::pair<unsigned int, ull>));
+    for(int i = 0; i < MAX_PROC; i++){
+        if(trace[i] != -1)
+            write(trace[i], &globalMData.logData[i][0], globalMData.logData[i].size() * sizeof(globalMData.logData[i][0]));
+    }
 
 
     // std::map <float, ull> globalLogDis, cacheLogDis;
@@ -243,7 +275,7 @@ VOID Fini(INT32 code, VOID *v)
     //    fprintf(trace, "Cache Access Distance (LOG): %5f, Times: %5llu\n", x.first, x.second);
     // }
     for(int i = 0; i < MAX_PROC; i++){
-        if(trace[i] == -1)
+        if(trace[i] != -1)
             close(trace[i]);
     }
 }

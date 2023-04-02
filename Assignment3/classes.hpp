@@ -6,6 +6,8 @@
 #include <unordered_map>
 #include <set>
 
+using std::set, std::unordered_map, std::vector, std::deque;
+
 #define ull unsigned long long
 #define timeAddr std::pair<unsigned long, ull>
 
@@ -35,12 +37,15 @@ class Inv : public Message {
 };
 class Cache {
     protected:
-        std::deque<Message> incomingMsg; // incoming messages from L2 and other L1s
-        std::vector<std::unordered_map<ull, ull>> CacheData;    // addr -> time map
-        std::vector <std::set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
+        deque<Message> incomingMsg; // incoming messages from L2 and other L1s
+        vector<unordered_map<ull, ull>> CacheData;    // addr -> time map
+        vector <set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         int id; // id of cache
+
+    public:
+        Cache(int id, int NUM_SETS): id(id), CacheData(NUM_SETS), timeBlockAdded(NUM_SETS) {};
 };
 class L1 : public Cache {
     int inputTrace; // from where you would read line to line
@@ -48,27 +53,33 @@ class L1 : public Cache {
     inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
     bool check_cache(ull addr){ return CacheData[set_from_addr(addr)].contains(addr); }
     public:
-        L1(int id){
-            this->id = id;
+        L1(int id): Cache(id, NUM_L1_SETS), tempSpace(nullptr) {
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
             this->inputTrace = open(tmp.c_str(), O_RDONLY);
-            this->tempSpace = nullptr;
-            this->CacheData.resize(NUM_L1_SETS);
-            this->timeBlockAdded.resize(NUM_L1_SETS);
         }
-        ~L1(){
-            close(inputTrace);
-        }
+        ~L1(){ close(inputTrace); }
 };
 class LLC_bank : public Cache {
     // class storage structures for  directory??
     inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
     bool check_cache(ull addr){ return CacheData[set_from_addr(addr)].contains(addr); }
     public:
-        LLC_bank(int id){
-            this->id = id;
-            this->CacheData.resize(NUM_L2_SETS_PER_BANK);
-            this->timeBlockAdded.resize(NUM_L2_SETS_PER_BANK);
-        }
+        LLC_bank(int id): Cache(id, NUM_L2_SETS_PER_BANK) {}
         ~LLC_bank(){}
+};
+
+class Processor {
+    int  numCaches; // number of L1 and LLC cache;
+    vector<L1> L1Caches;
+    vector<LLC_bank> L2Caches;
+    public:
+        Processor() = delete; // delete default constructor
+        Processor(int nCaches): numCaches(nCaches) {
+            for(int i = 0; i < numCaches; i++) {
+                L1 ith_L1 = L1(i);
+                LLC_bank ith_L2 = LLC_bank(i);
+                L1Caches.push_back(ith_L1);
+                L2Caches.push_back(ith_L2);
+            }
+        }
 };

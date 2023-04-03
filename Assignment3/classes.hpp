@@ -114,6 +114,10 @@ class Cache {
             return {addr_evicted, true};
         }
     public:
+        // need proc since we need to pass it to message.handle() that would be called inside
+        void process(Processor &proc){
+            // call message.handle()
+        }
         Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets) {
             
         };
@@ -144,26 +148,26 @@ class L1 : public Cache {
         ~L1(){ close(inputTrace); }
 };
 class LLCBank : public Cache {
-    // class storage structures for  directory??
-    inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
-    bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
+    private:
+        // class storage structures for  directory??
+        inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
+        bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
     public:
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK) {}
         ~LLCBank(){}
 };
 
 class Processor {
-    int numCaches; // number of L1 and LLC cache;
-    int numCycles; // number of Cycles
-    vector<L1> L1Caches;
-    vector<LLCBank> L2Caches;
+    private:
+        int numCaches; // number of L1 and LLC cache;
+        int numCycles; // number of Cycles
+        vector<L1> L1Caches;
+        vector<LLCBank> L2Caches;
     public:
         Processor(int nCaches): numCaches(nCaches) {
             for(int i = 0; i < numCaches; i++) {
-                L1 ith_L1 = L1(i);
-                LLCBank ith_L2 = LLCBank(i);
-                L1Caches.push_back(std::move(L1(i)));
-                L2Caches.push_back(std::move(LLCBank(i)));
+                L1Caches.emplace_back(i);
+                L2Caches.emplace_back(i);
             }
         }
         void run(){
@@ -171,11 +175,11 @@ class Processor {
                 bool progressMade = false;
                 for(int i = 0; i < numCaches; i++){
                     // process L1    
-
+                    L1Caches[i].process(*this);
                 }
                 for(int i = 0; i < numCaches; i++){
                     // process L2
-                    
+                    L2Caches[i].process(*this);
                 }
                 if(!progressMade){break;}
             }

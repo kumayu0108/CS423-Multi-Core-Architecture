@@ -10,7 +10,7 @@
 #include <assert.h>
 
 using std::set, std::unordered_map, std::vector, std::deque;
-// using std::unique_ptr, std::make_unique;
+using std::unique_ptr, std::make_unique, std::move;
 
 #define ull unsigned long long
 #define timeAddr std::pair<unsigned long, ull>
@@ -37,62 +37,42 @@ class Processor;    //forward declaration
 
 class Message {
     public:
-        enum MsgType { INV, NACK,  };
+        enum MsgType { INV, NACK, ACK};
         MsgType msgType;
         int from, to; // store from and to cache id.
         bool fromL1; // store if the message comes from l1 or l2. useful in l1 to l1 transfers
         virtual void handle(Processor &proc){}
-        Message(){}
+        Message(const Message&) = delete; // delete copy ctor explicitly since Message is a move only cls.
+        Message() : msgType(MsgType::NACK), from(0), to(0), fromL1(false) {}
+        Message(MsgType msgType, int from, int to, bool fromL1) :
+            msgType(msgType), from(from), to(to), fromL1(fromL1) {}
+        Message(Message && other) noexcept : msgType(move(other.msgType)),
+            from(move(other.from)),
+            to(move(other.to)),
+            fromL1(move(other.fromL1)) {}
+
 };
 // just serves as an example to show inheritance model.
 class Inv : public Message {
     ull blockId; // which cache block to be evicted?
-    ull msgId;
+    ull msgId; // What message is the invalidation a reply to?
     public:
         void handle(Processor &proc) {}
-        Inv(){}
-};
-class Nack : public Message {
-    public:
-        void handle(Processor &proc) {}
-        Nack(){}
-};
-class Get : public Message {
-    public:
-        void handle(Processor &proc) {}
-        Get(){}
-};
-class Getx : public Message {
-    public:
-        void handle(Processor &proc) {}
-        Getx(){}
-};
-class Put : public Message {
-    public:
-        void handle(Processor &proc) {}
-        Put(){}
-};
-class Putx : public Message {
-    public:
-        void handle(Processor &proc) {}
-        Putx(){}
-};
-class Upgr : public Message {
-    public:
-        void handle(Processor &proc) {}
-        Upgr(){}
+        Inv(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        Inv() : Message(), blockId(0), msgId(0) {}
+        Inv(Inv&& other) noexcept : Message(move(other)), blockId(move(other.blockId)), msgId(other.msgId) {}
 };
 
 class Cache {
     protected:
-        deque<Message *> incomingMsg; // incoming messages from L2 and other L1s
+        deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         vector<unordered_map<ull, ull>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         int id; // id of cache
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         // this function only removes this addr from cache & returns if anything got evicted
-        bool evict(ull st, ull addr){        
+        bool evict(ull st, ull addr){
             assert(st < cacheData.size());
             if(!cacheData[st].contains(addr)){ return false; }
             int time = cacheData[st][addr];
@@ -118,16 +98,15 @@ class Cache {
         void process(Processor &proc){
             // call message.handle()
         }
-        Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets) {
-            
-        };
+        Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets) {}
+        Cache(Cache &&other) noexcept : id(move(other.id)), cacheData(move(other.cacheData)), timeBlockAdded(move(other.timeBlockAdded)) {};
 };
 class L1 : public Cache {
     private:
         int inputTrace; // from where you would read line to line
         char buffer[MAX_BUF_L1 * sizeof(LogStruct) + 2];
         deque<LogStruct> logs;
-        Message *tempSpace; // when we deque, we need to store the top message.
+        unique_ptr<Message> tempSpace; // when we deque, we need to store the top message.
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         void read_if_reqd(){
@@ -141,10 +120,14 @@ class L1 : public Cache {
             }
         }
     public:
-        L1(int id): Cache(id, NUM_L1_SETS) {
+        L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr){
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
             this->inputTrace = open(tmp.c_str(), O_RDONLY);
+            // unique_ptr<Message> mesg = make_unique<Inv>();
+            // incomingMsg.push_back(move(mesg));
+            // incomingMsg.emplace_back(make_unique<Inv>());
         }
+        L1(L1&& other) noexcept : Cache(move(other)), inputTrace(move(other.inputTrace)), tempSpace(move(other.tempSpace)) {}
         ~L1(){ close(inputTrace); }
 };
 class LLCBank : public Cache {
@@ -154,6 +137,7 @@ class LLCBank : public Cache {
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
     public:
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK) {}
+        LLCBank(LLCBank &&other) noexcept : Cache(move(other)) {}
         ~LLCBank(){}
 };
 
@@ -167,14 +151,14 @@ class Processor {
         Processor(int nCaches): numCaches(nCaches) {
             for(int i = 0; i < numCaches; i++) {
                 L1Caches.emplace_back(i);
-                L2Caches.emplace_back(i);
+                L2Caches.emplace_back(LLCBank(i));
             }
         }
         void run(){
             while(true){
                 bool progressMade = false;
                 for(int i = 0; i < numCaches; i++){
-                    // process L1    
+                    // process L1
                     L1Caches[i].process(*this);
                 }
                 for(int i = 0; i < numCaches; i++){

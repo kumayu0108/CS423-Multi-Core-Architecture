@@ -45,39 +45,47 @@ class Processor;    //forward declaration
 
 class Message {
     public:
-        enum MsgType { INV, NACK, ACK};
+        ull msgId; // Message id should be here, since before processing a message we need to check if we can process it?
+        enum MsgType { INV, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
         MsgType msgType;
         int from, to; // store from and to cache id.
         bool fromL1; // store if the message comes from l1 or l2. useful in l1 to l1 transfers
         virtual void handle(Processor &proc){}
         Message(const Message&) = delete; // delete copy ctor explicitly since Message is a move only cls.
         Message& operator=(const Message&) = delete; // delete copy assignment ctor too.
-        Message() : msgType(MsgType::NACK), from(0), to(0), fromL1(false) {}
-        Message(MsgType msgType, int from, int to, bool fromL1) :
-            msgType(msgType), from(from), to(to), fromL1(fromL1) {}
+        Message() : msgType(MsgType::NACK), from(0), to(0), fromL1(false), msgId(0) {}
+        Message(MsgType msgType, int from, int to, bool fromL1, ull msgId) :
+            msgType(msgType), from(from), to(to), fromL1(fromL1), msgId(msgId) {}
         Message(Message && other) noexcept : msgType(move(other.msgType)),
             from(move(other.from)),
             to(move(other.to)),
-            fromL1(move(other.fromL1)) {}
+            fromL1(move(other.fromL1)),
+            msgId(other.msgId) {}
 
 };
 // just serves as an example to show inheritance model.
 class Inv : public Message {
     ull blockId; // which cache block to be evicted?
-    ull msgId; // What message is the invalidation a reply to?
     public:
         void handle(Processor &proc) {}
         Inv(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Inv& operator=(const Inv&) = delete; // delete copy assignment ctor too.
-        Inv() : Message(), blockId(0), msgId(0) {}
-        Inv(Inv&& other) noexcept : Message(move(other)), blockId(move(other.blockId)), msgId(other.msgId) {}
+        Inv() : Message(), blockId(0) {}
+        Inv(Inv&& other) noexcept : Message(move(other)), blockId(move(other.blockId)) {}
 };
 
 class Cache {
     protected:
-        deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
+        // probably need these as public
+        enum State {M, O, S, I};
+        State state;
         vector<unordered_map<ull, ull>> cacheData;    // addr -> time map
+        deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
+        // This is needed as L1 doesn't has access to directory to check if it can do stores or not
+        // TODO : Whenever any cache related operations are called, need to make sure this cacheState has correct values!!!
+        vector<unordered_map<ull, State>> cacheState;    // addr -> state map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
+        int nextGlobalMsgToProcess;
         int id; // id of cache
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
@@ -105,11 +113,9 @@ class Cache {
         }
     public:
         // need proc since we need to pass it to message.handle() that would be called inside
-        void process(Processor &proc){
-            // call message.handle()
-        }
-        Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets) {}
-        Cache(Cache &&other) noexcept : id(move(other.id)), cacheData(move(other.cacheData)), timeBlockAdded(move(other.timeBlockAdded)) {};
+        virtual bool process(Processor &proc) = 0;
+        Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets), nextGlobalMsgToProcess(0) {}
+        Cache(Cache &&other) noexcept : id(move(other.id)), cacheData(move(other.cacheData)), timeBlockAdded(move(other.timeBlockAdded)), nextGlobalMsgToProcess(0) {};
 };
 class L1 : public Cache {
     private:
@@ -121,21 +127,41 @@ class L1 : public Cache {
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         void read_if_reqd(){
             if(!logs.empty()){ return; }
-            int numBytesRead = read(inputTrace, buffer, MAX_BUF_L1 * sizeof(LogStruct));
+            int num_bytes_read = read(inputTrace, buffer, MAX_BUF_L1 * sizeof(LogStruct));
             int ind = 0;
-            while(ind < numBytesRead and ind + sizeof(LogStruct) <= numBytesRead){
-                LogStruct *tmpStruct = (LogStruct *)&buffer[ind];
-                logs.push_back(*tmpStruct);
+            while(ind < num_bytes_read and ind + sizeof(LogStruct) <= num_bytes_read){
+                LogStruct *tmp_struct = (LogStruct *)&buffer[ind];
+                logs.push_back(*tmp_struct);
                 ind += sizeof(LogStruct);
             }
         }
     public:
+        bool process(Processor &proc){
+            if(incomingMsg.empty()){
+                read_if_reqd();
+                if(logs.empty() or nextGlobalMsgToProcess < logs.front().time){ return false; }
+
+            }
+            else {
+                if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; }
+                auto msg = move(incomingMsg.front());
+                incomingMsg.pop_front();
+                // cast unique pointer of base class to derived class with appropriate variables
+                if(msg->msgType == Message::MsgType::INV){
+
+                }
+                else if(msg->msgType == Message::MsgType::GET){
+
+                }
+                else if(msg->msgType == Message::MsgType::NACK){
+                    
+                }
+            }
+            return false;
+        }
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr){
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
             this->inputTrace = open(tmp.c_str(), O_RDONLY);
-            // unique_ptr<Message> mesg = make_unique<Inv>();
-            // incomingMsg.push_back(move(mesg));
-            // incomingMsg.emplace_back(make_unique<Inv>());
         }
         L1(const L1&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         L1& operator=(const L1&) = delete; // delete copy assignment ctor too.
@@ -143,12 +169,19 @@ class L1 : public Cache {
         ~L1(){ close(inputTrace); }
 };
 class LLCBank : public Cache {
-    vector<unordered_map<ull, DirEnt>>directory; // blockwise coherence. maps a block to its entry.
+    vector<unordered_map<ull, DirEnt>>directory; // blockwise coherence. maps a block address to its entry.
     private:
         // class storage structures for  directory??
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
     public:
+        bool process(Processor &proc){
+            if(!incomingMsg.empty()){
+                if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; }
+
+            }
+            return false;
+        }
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK), directory(NUM_L2_SETS_PER_BANK) {}
         LLCBank(const LLCBank&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         LLCBank& operator=(const LLCBank&) = delete; // delete copy assignment ctor too.
@@ -173,11 +206,11 @@ class Processor {
                 bool progressMade = false;
                 for(int i = 0; i < NUM_CACHE; i++){
                     // process L1
-                    L1Caches[i].process(*this);
+                    progressMade |= L1Caches[i].process(*this);
                 }
                 for(int i = 0; i < NUM_CACHE; i++){
                     // process L2
-                    L2Caches[i].process(*this);
+                    progressMade |= L2Caches[i].process(*this);
                 }
                 if(!progressMade){break;}
             }

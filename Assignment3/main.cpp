@@ -10,7 +10,6 @@ int main(int argc, char *argv[]){
         exit(1);
     }
 
-    numCaches = atoi(argv[1]);
-    Processor proc(numCaches);
+    Processor proc;
     // proc.run();
 }

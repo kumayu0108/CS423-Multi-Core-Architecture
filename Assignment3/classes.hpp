@@ -33,6 +33,11 @@ struct LogStruct {
     bool isStore;  // boolean; tells if the current machine access is a store or not
     unsigned int time;  // global time to sync events
     ull addr;     // address (with last LOG_BLOCK_SIZE bits set to 0)
+
+    LogStruct(LogStruct&& other) noexcept : isStore(move(other.isStore)),
+        time(move(other.time)),
+        addr(move(other.addr)) {}
+    LogStruct(const LogStruct& other): isStore(other.isStore), time(other.time), addr(other.addr) {}
 };
 
 struct DirEnt {
@@ -49,7 +54,6 @@ class Message {
         enum MsgType { INV, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
         MsgType msgType;
         int from, to; // store from and to cache id.
-        // (only for msgType == INV) We can also use this to discern the case when L2 sends Invalidations because of inclusivity, we could enable this when we need to send invalidation ack to L1 caches and disable when L2 sent this 
         bool fromL1; // store if the message comes from l1 or l2. useful in l1 to l1 transfers
         virtual void handle(Processor &proc){}
         Message(const Message&) = delete; // delete copy ctor explicitly since Message is a move only cls.
@@ -73,7 +77,7 @@ class Inv : public Message {
         Inv& operator=(const Inv&) = delete; // delete copy assignment ctor too.
         Inv() : Message(), blockAddr(0) {}
         Inv(Inv&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
-        Inv(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) : 
+        Inv(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) :
             Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
 };
 class InvAck : public Message {
@@ -83,8 +87,8 @@ class InvAck : public Message {
         InvAck(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         InvAck& operator=(const Inv&) = delete; // delete copy assignment ctor too.
         InvAck() : Message() {}
-        InvAck(Inv&& other) noexcept : Message(move(other)) {}
-        InvAck(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) : 
+        InvAck(Inv&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
+        InvAck(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) :
             Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
 };
 
@@ -94,9 +98,6 @@ class Cache {
         enum State {M, E, S, I};
         State state;
         vector<unordered_map<ull, ull>> cacheData;    // addr -> time map
-        // This is needed as L1 doesn't has access to directory to check if it can do stores or not
-        // TODO : Whenever any cache related operations are called, need to make sure this cacheState has correct values!!!
-        vector<unordered_map<ull, State>> cacheState;    // addr -> state map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         int nextGlobalMsgToProcess;
         int id; // id of cache
@@ -129,7 +130,11 @@ class Cache {
         // need proc since we need to pass it to message.handle() that would be called inside
         virtual bool process(Processor &proc) = 0;
         Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets), nextGlobalMsgToProcess(0) {}
-        Cache(Cache &&other) noexcept : id(move(other.id)), cacheData(move(other.cacheData)), timeBlockAdded(move(other.timeBlockAdded)), nextGlobalMsgToProcess(0) {};
+        Cache(Cache &&other) noexcept : id(move(other.id)),
+            cacheData(move(other.cacheData)),
+            timeBlockAdded(move(other.timeBlockAdded)),
+            nextGlobalMsgToProcess(move(other.nextGlobalMsgToProcess)),
+            state(move(other.state)) {}
 };
 class L1 : public Cache {
     private:
@@ -157,7 +162,14 @@ class L1 : public Cache {
         }
         L1(const L1&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         L1& operator=(const L1&) = delete; // delete copy assignment ctor too.
-        L1(L1&& other) noexcept : Cache(move(other)), inputTrace(move(other.inputTrace)), tempSpace(move(other.tempSpace)) {}
+        L1(L1&& other) noexcept : Cache(move(other)),
+            inputTrace(move(other.inputTrace)),
+            tempSpace(move(other.tempSpace)),
+            logs(move(other.logs)) {
+                for(int i = 0; i < MAX_BUF_L1 * sizeof(LogStruct) + 2; i++) {
+                    buffer[i] = move(other.buffer[i]);
+                }
+            }
         ~L1(){ close(inputTrace); }
 };
 class LLCBank : public Cache {
@@ -189,7 +201,7 @@ class Processor {
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;
     public:
-        Processor() {
+        Processor(): numCycles(0) {
             for(int i = 0; i < NUM_CACHE; i++) {
                 L1Caches.emplace_back(i);
                 L2Caches.emplace_back(LLCBank(i));
@@ -216,7 +228,7 @@ bool L1::process(Processor &proc){
     if(incomingMsg.empty()){
         read_if_reqd();
         if(logs.empty() or nextGlobalMsgToProcess < logs.front().time){ return false; }
-        
+
     }
     else {
         if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; }
@@ -229,25 +241,25 @@ bool L1::process(Processor &proc){
             inv_msg->handle(proc); // handler called
         }
         else if(msg->msgType == Message::MsgType::GET){
-            
+
         }
         else if(msg->msgType == Message::MsgType::NACK){
-            
+
         }
         else if(msg->msgType == Message::MsgType::GETX){
-            
+
         }
         else if(msg->msgType == Message::MsgType::PUT){
-            
+
         }
         else if(msg->msgType == Message::MsgType::PUTX){
-            
+
         }
         else if(msg->msgType == Message::MsgType::WB){
-            
+
         }
         else if(msg->msgType == Message::MsgType::WB_ACK){
-            
+
         }
     }
     return false;
@@ -259,7 +271,7 @@ void Inv::handle(Processor &proc){
     l1.evict(l1.set_from_addr(blockAddr), blockAddr);
     // TODO : set cacheState to I
     if(fromL1){    // if the message is sent by L1, it means it is because someone requested S/I -> M
-        // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.  
+        // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
         unique_ptr<Message> inv_ack(new InvAck(msgType, to, from, true, msgId, blockAddr));
         proc.L1Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
     }

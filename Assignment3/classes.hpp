@@ -42,16 +42,18 @@ struct LogStruct {
 
 struct DirEnt {
     bitset<NUM_CACHE> bitVector;
+    int ownerId; // could store owner here instead of actually storing it in the bitvector
     bool dirty;
     bool pending; // is a boolean enough, do we need more?
 };
+
 
 class Processor;    //forward declaration
 
 class Message {
     public:
         ull msgId; // Message id should be here, since before processing a message we need to check if we can process it?
-        enum MsgType { INV, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
+        enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
         MsgType msgType;
         int from, to; // store from and to cache id.
         bool fromL1; // store if the message comes from l1 or l2. useful in l1 to l1 transfers
@@ -92,6 +94,30 @@ class InvAck : public Message {
             Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
 };
 
+class Get : public Message {
+    public:
+        ull blockAddr; // which cache block ADDR to be evicted?
+        void handle(Processor &proc);
+        Get(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        Get& operator=(const Inv&) = delete; // delete copy assignment ctor too.
+        Get() : Message() {}
+        Get(Inv&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
+        Get(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) :
+            Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
+};
+
+class Put : public Message {
+    public:
+        ull blockAddr; // which cache block ADDR to be evicted?
+        void handle(Processor &proc);
+        Put(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        Put& operator=(const Inv&) = delete; // delete copy assignment ctor too.
+        Put() : Message() {}
+        Put(Inv&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
+        Put(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) :
+            Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
+};
+
 class Cache {
     protected:
         // probably need these as public
@@ -102,6 +128,8 @@ class Cache {
         int nextGlobalMsgToProcess;
         int id; // id of cache
     public:
+        unordered_map<ull, int> numInvToCollect;    // map from block address to number of invalidations to collect
+        bool lastMsgProcessed;
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         // this function only removes this addr from cache & returns if anything got evicted
@@ -129,12 +157,14 @@ class Cache {
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         // need proc since we need to pass it to message.handle() that would be called inside
         virtual bool process(Processor &proc) = 0;
-        Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets), nextGlobalMsgToProcess(0) {}
+        Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets), nextGlobalMsgToProcess(0), numInvToCollect(0), lastMsgProcessed(false) {}
         Cache(Cache &&other) noexcept : id(move(other.id)),
             cacheData(move(other.cacheData)),
             timeBlockAdded(move(other.timeBlockAdded)),
             nextGlobalMsgToProcess(move(other.nextGlobalMsgToProcess)),
-            state(move(other.state)) {}
+            state(move(other.state)), 
+            numInvToCollect(move(other.numInvToCollect)),
+            lastMsgProcessed(move(other.lastMsgProcessed)) {}
 };
 class L1 : public Cache {
     private:
@@ -174,18 +204,13 @@ class L1 : public Cache {
 };
 class LLCBank : public Cache {
     private:
-        // class storage structures for  directory??
-        vector<unordered_map<ull, DirEnt>>directory; // blockwise coherence. maps a block address to its entry.
+        friend class Get;
+        // AYUSH: instead of vector of map, directory could only be a map of address to DirEnt
+        unordered_map<ull, DirEnt>directory; // blockwise coherence. maps a block address to its entry.
     public:
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
-        bool process(Processor &proc){
-            if(!incomingMsg.empty()){
-                if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; }
-
-            }
-            return false;
-        }
+        bool process(Processor &proc);
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK), directory(NUM_L2_SETS_PER_BANK) {}
         LLCBank(const LLCBank&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         LLCBank& operator=(const LLCBank&) = delete; // delete copy assignment ctor too.
@@ -195,8 +220,9 @@ class LLCBank : public Cache {
 
 class Processor {
     private:
-        friend class L1;
         friend class Inv;
+        friend class InvAck;
+        friend class Get;
         int numCycles; // number of Cycles
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;
@@ -223,44 +249,115 @@ class Processor {
         }
 };
 
+// this wrapper would convert message to required type by taking ownership and then returns ownership
+#define CALL_HANDLER(MSG_TYPE) \
+    unique_ptr<MSG_TYPE> inv_msg(static_cast<MSG_TYPE *>(msg.release())); \
+    inv_msg->handle(proc); \
+    msg.reset(static_cast<Message *>(inv_msg.release()))
 
 bool L1::process(Processor &proc){
-    if(incomingMsg.empty()){
+    if(incomingMsg.empty()){    // process message from trace
         read_if_reqd();
         if(logs.empty() or nextGlobalMsgToProcess < logs.front().time){ return false; }
 
     }
     else {
-        if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; }
+        if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; } // AYUSH: or should we then process messages from trace?
         auto msg = move(incomingMsg.front());
         incomingMsg.pop_front();
         // cast unique pointer of base class to derived class with appropriate variables
-        if(msg->msgType == Message::MsgType::INV){
-            // convert to required type
-            unique_ptr<Inv> inv_msg(static_cast<Inv *>(msg.release()));
-            inv_msg->handle(proc); // handler called
-        }
-        else if(msg->msgType == Message::MsgType::GET){
+        switch (msg->msgType) {
+            case Message::MsgType::INV: {
+                CALL_HANDLER(Inv);
+                break;
+            }
+            case Message::MsgType::INV_ACK:{
+                CALL_HANDLER(Inv);
+                break;
+            }
 
-        }
-        else if(msg->msgType == Message::MsgType::NACK){
+            case Message::MsgType::GET:{
+                CALL_HANDLER(Inv);
+                break;
+            }
 
-        }
-        else if(msg->msgType == Message::MsgType::GETX){
+            case Message::MsgType::NACK:{
+                break;
+            }
 
-        }
-        else if(msg->msgType == Message::MsgType::PUT){
+            case Message::MsgType::GETX:{
+                break;
+            }
 
-        }
-        else if(msg->msgType == Message::MsgType::PUTX){
+            case Message::MsgType::PUT:{
+                break;
+            }
 
-        }
-        else if(msg->msgType == Message::MsgType::WB){
+            case Message::MsgType::PUTX:{
+                break;
+            }
 
-        }
-        else if(msg->msgType == Message::MsgType::WB_ACK){
+            case Message::MsgType::WB:{
+                break;
+            }
 
+            case Message::MsgType::WB_ACK:{
+                break;
+            }
         }
+        if(!lastMsgProcessed){
+            incomingMsg.push_front(move(msg));
+        }
+    }
+    return false;
+}
+
+bool LLCBank::process(Processor &proc){
+    if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; } // AYUSH: or should we then process messages from trace?
+    auto msg = move(incomingMsg.front());
+    incomingMsg.pop_front();
+    // cast unique pointer of base class to derived class with appropriate variables
+    switch (msg->msgType) {
+        case Message::MsgType::INV: {
+            CALL_HANDLER(Inv);
+            break;
+        }
+        case Message::MsgType::INV_ACK:{
+            CALL_HANDLER(Inv);
+            break;
+        }
+
+        case Message::MsgType::GET:{
+            CALL_HANDLER(Inv);
+            break;
+        }
+
+        case Message::MsgType::NACK:{
+            break;
+        }
+
+        case Message::MsgType::GETX:{
+            break;
+        }
+
+        case Message::MsgType::PUT:{
+            break;
+        }
+
+        case Message::MsgType::PUTX:{
+            break;
+        }
+
+        case Message::MsgType::WB:{
+            break;
+        }
+
+        case Message::MsgType::WB_ACK:{
+            break;
+        }
+    }
+    if(!lastMsgProcessed){
+        incomingMsg.push_front(move(msg));
     }
     return false;
 }
@@ -269,19 +366,59 @@ void Inv::handle(Processor &proc){
     auto &l1 = proc.L1Caches[to];
     // evict from L1
     l1.evict(l1.set_from_addr(blockAddr), blockAddr);
-    // TODO : set cacheState to I
     if(fromL1){    // if the message is sent by L1, it means it is because someone requested S/I -> M
         // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
-        unique_ptr<Message> inv_ack(new InvAck(msgType, to, from, true, msgId, blockAddr));
+        unique_ptr<Message> inv_ack(new InvAck(Message::MsgType::INV_ACK, to, from, true, msgId, blockAddr));
         proc.L1Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
     }
     else {
         // generate inv ack to be sent to 'from' LLC
-        unique_ptr<Message> inv_ack(new InvAck(msgType, to, from, true, msgId, blockAddr));
+        unique_ptr<Message> inv_ack(new InvAck(Message::MsgType::INV_ACK, to, from, true, msgId, blockAddr));
         proc.L2Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
     }
+    l1.lastMsgProcessed = true;
 }
 
 void InvAck::handle(Processor &proc){
+    if(fromL1){
+        auto &l1 = proc.L1Caches[to];
+        assert(l1.numInvToCollect.contains(blockAddr)); // since we collect an invalidation this means that this entry should contain this block address
+        l1.numInvToCollect[blockAddr]--;
+        if(l1.numInvToCollect[blockAddr] == 0){
+            l1.numInvToCollect.erase(blockAddr);
+        }
+    }
+    else {
+        // this shouldn't happen 
+        assert(false);
+    }
+}
 
+void Get::handle(Processor &proc){
+    if(fromL1){ // this means message is sent to LLC bank
+        auto &l2 = proc.L2Caches[to];
+        if(l2.directory.contains(blockAddr)){
+            if(l2.directory[blockAddr].dirty){
+                int owner = l2.directory[blockAddr].ownerId;
+                unique_ptr<Message> get(new Get(Message::MsgType::GET, to, owner, false, msgId, blockAddr));
+                proc.L1Caches[get->to].incomingMsg.push_back(move(get));
+                l2.directory[blockAddr].pending = true;
+                l2.directory[blockAddr].bitVector.reset();
+                l2.directory[blockAddr].bitVector.set(from);
+                l2.directory[blockAddr].bitVector.set(owner);
+                l2.lastMsgProcessed = true;
+            }
+            else if(l2.directory[blockAddr].pending){
+                l2.lastMsgProcessed = false;
+            }
+        }
+        else {
+            unique_ptr<Message> put(new Put(Message::MsgType::PUT, to, from, false, msgId, blockAddr));
+            proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+            l2.lastMsgProcessed = true;
+        }
+    }
+    else {  // this means that message is an intervention
+
+    }
 }

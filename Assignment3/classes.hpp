@@ -164,7 +164,8 @@ class Cache {
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         // this function only removes this addr from cache & returns if anything got evicted
-        bool evict(ull st, ull addr){
+        bool evict(ull addr){
+            ull st = set_from_addr(addr);
             assert(st < cacheData.size());
             if(!cacheData[st].contains(addr)){ return false; }
             int time = cacheData[st][addr];
@@ -173,7 +174,8 @@ class Cache {
             return true;
         }
         // this function replaces this addr from cache and returns the replaced address & flag stating valid block
-        blk replace(ull st, ull addr, ull timeAdded, int maxSetSize){
+        blk replace(ull addr, ull timeAdded, int maxSetSize){
+            ull st = set_from_addr(addr);
             assert(st < cacheData.size());
             if(cacheData[st].size() < maxSetSize){cacheData[st][addr] = timeAdded; return {0, false};}
             assert(cacheData[st].size() == maxSetSize and timeBlockAdded[st].size() == maxSetSize);
@@ -184,6 +186,16 @@ class Cache {
             cacheData[st][addr] = timeAdded;
             timeBlockAdded[st].insert({timeAdded, addr});
             return {addr_evicted, true};
+        }
+        // AYUSH : Check the implementation
+        void update_priority(ull addr){ // this function updates the priority of address 
+            ull st = set_from_addr(addr);
+            assert(st < cacheData.size() && cacheData[st].contains(addr));
+            int time = cacheData[st][addr];
+            timeBlockAdded[st].erase({time, addr});
+            int nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+            timeBlockAdded[st].insert({nwTime, addr});
+            cacheData[st][addr] = nwTime;
         }
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         // need proc since we need to pass it to message.handle() that would be called inside
@@ -199,6 +211,7 @@ class Cache {
             numInvToCollect(move(other.numInvToCollect)),
             outstandingNacks(move(other.outstandingNacks)) {}
 };
+
 class L1 : public Cache {
     private:
         int inputTrace; // from where you would read line to line
@@ -216,10 +229,11 @@ class L1 : public Cache {
             }
         }
     public:
+        unordered_map <MsgType, vector <ull>> outstadingMessages; // this would be a map from what messages are outstanding to a struct (which is currently only a block address, but could contain other things) 
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         bool process(Processor &proc);
-        L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr){
+        L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
             this->inputTrace = open(tmp.c_str(), O_RDONLY);
         }
@@ -228,7 +242,8 @@ class L1 : public Cache {
         L1(L1&& other) noexcept : Cache(move(other)),
             inputTrace(move(other.inputTrace)),
             tempSpace(move(other.tempSpace)),
-            logs(move(other.logs)) {
+            logs(move(other.logs)),
+            outstadingMessages(move(other.outstadingMessages)) {
                 for(int i = 0; i < MAX_BUF_L1 * sizeof(LogStruct) + 2; i++) {
                     buffer[i] = move(other.buffer[i]);
                 }
@@ -402,7 +417,7 @@ bool LLCBank::process(Processor &proc){
 void Inv::handle(Processor &proc, bool toL1){
     auto &l1 = proc.L1Caches[to];
     // evict from L1
-    l1.evict(l1.set_from_addr(blockAddr), blockAddr);
+    l1.evict(blockAddr);
     if(fromL1){    // if the message is sent by L1, it means it is because someone requested S/I -> M
         assert(toL1); // any invalidations sent by L1 would be sent to L1
         // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
@@ -476,8 +491,8 @@ void Get::handle(Processor &proc, bool toL1){
 }
 
 // Increase counter after processing. (done)
-// Maintain outstanding misses table.
-// remove message ID from message class, no need to look at order.In each cycle, exactly one machine access should be issued, increment counter. 
+// Maintain outstanding misses table. (done)
+// remove message ID from message class, no need to look at order.In each cycle, exactly one machine access should be issued, increment counter. (done)
 // For processing messages, in each cycle, deque one message from each queue, and process it. (done)
 // Implement NACK. Remove lastMsgProcessed(Done, need to implement NACK). (done)
 // maintain a nastruct ck table, {GetX/Get, block} -> countdown_timer. map<NACKStruct, timer> (done)

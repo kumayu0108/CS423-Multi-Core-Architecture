@@ -4,13 +4,14 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <map>
 #include <set>
 #include <bitset>
 #include <iostream>
 #include <memory>
 #include <assert.h>
 
-using std::set, std::unordered_map, std::vector, std::deque, std::bitset;
+using std::set, std::unordered_map, std::vector, std::deque, std::bitset, std::map;
 using std::unique_ptr, std::make_unique, std::move;
 
 #define ull unsigned long long
@@ -28,6 +29,8 @@ constexpr int MAX_BUF_L1 = 10;
 constexpr int NUM_CACHE = 8;
 int trace[MAX_PROC];
 
+enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
+
 // The data is logged in binary in the format of the following struct
 struct LogStruct {
     bool isStore;  // boolean; tells if the current machine access is a store or not
@@ -40,11 +43,26 @@ struct LogStruct {
     LogStruct(const LogStruct& other): isStore(other.isStore), time(other.time), addr(other.addr) {}
 };
 
+struct NACKStruct {
+    MsgType msg;
+    ull blockAddr;
+
+    NACKStruct(): msg(MsgType::GET), blockAddr(0) {}
+    NACKStruct(NACKStruct&& other) noexcept: msg(move(other.msg)), blockAddr(move(other.blockAddr)) {}
+    bool operator<(const NACKStruct& other) { return blockAddr < other.blockAddr; }
+};
+
 struct DirEnt {
     bitset<NUM_CACHE> bitVector;
     int ownerId; // could store owner here instead of actually storing it in the bitvector
     bool dirty;
     bool pending; // is a boolean enough, do we need more?
+
+    DirEnt(): dirty(true), ownerId(0), pending(false) { bitVector.reset(); };
+    DirEnt(DirEnt&& other) noexcept: dirty(move(other.dirty)),
+        bitVector(move(other.bitVector)),
+        ownerId(move(other.ownerId)),
+        pending(move(other.pending)) {}
 };
 
 
@@ -53,28 +71,27 @@ class Processor;    //forward declaration
 class Message {
     public:
         ull msgId; // Message id should be here, since before processing a message we need to check if we can process it?
-        enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
         MsgType msgType;
         int from, to; // store from and to cache id.
         bool fromL1; // store if the message comes from l1 or l2. useful in l1 to l1 transfers
-        virtual void handle(Processor &proc){}
+        virtual void handle(Processor &proc, bool toL1){}
         Message(const Message&) = delete; // delete copy ctor explicitly since Message is a move only cls.
         Message& operator=(const Message&) = delete; // delete copy assignment ctor too.
         Message() : msgType(MsgType::NACK), from(0), to(0), fromL1(false), msgId(0) {}
         Message(MsgType msgType, int from, int to, bool fromL1, ull msgId) :
             msgType(msgType), from(from), to(to), fromL1(fromL1), msgId(msgId) {}
-        Message(Message && other) noexcept : msgType(move(other.msgType)),
+        Message(Message && other) noexcept : msgId(move(other.msgId)),
+            msgType(move(other.msgType)),
             from(move(other.from)),
             to(move(other.to)),
-            fromL1(move(other.fromL1)),
-            msgId(move(other.msgId)) {}
+            fromL1(move(other.fromL1)) {}
 
 };
 // just serves as an example to show inheritance model.
 class Inv : public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
-        void handle(Processor &proc);
+        void handle(Processor &proc, bool toL1);
         Inv(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Inv& operator=(const Inv&) = delete; // delete copy assignment ctor too.
         Inv() : Message(), blockAddr(0) {}
@@ -85,7 +102,7 @@ class Inv : public Message {
 class InvAck : public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
-        void handle(Processor &proc);
+        void handle(Processor &proc, bool toL1);
         InvAck(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         InvAck& operator=(const Inv&) = delete; // delete copy assignment ctor too.
         InvAck() : Message() {}
@@ -97,7 +114,7 @@ class InvAck : public Message {
 class Get : public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
-        void handle(Processor &proc);
+        void handle(Processor &proc, bool toL1);
         Get(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Get& operator=(const Inv&) = delete; // delete copy assignment ctor too.
         Get() : Message() {}
@@ -106,30 +123,29 @@ class Get : public Message {
             Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
 };
 
-class Put : public Message {
-    public:
-        ull blockAddr; // which cache block ADDR to be evicted?
-        void handle(Processor &proc);
-        Put(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
-        Put& operator=(const Inv&) = delete; // delete copy assignment ctor too.
-        Put() : Message() {}
-        Put(Inv&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
-        Put(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) :
-            Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
+class Put: public Message {
+    ull blockAddr; // which cache block ADDR to be evicted?
+    void handle(Processor &proc, bool toL1);
+    Put(const Inv&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+    Put& operator=(const Inv&) = delete; // delete copy assignment ctor too.
+    Put() : Message() {}
+    Put(Inv&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
+    Put(MsgType msgType, int from, int to, bool fromL1, ull msgId, ull blockId) :
+    Message(msgType, from, to, fromL1, msgId), blockAddr(blockId) {}
 };
 
 class Cache {
     protected:
         // probably need these as public
         enum State {M, E, S, I};
-        State state;
         vector<unordered_map<ull, ull>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
+        map<NACKStruct, int> outstandingNacks;
+        unordered_map<ull, State> cacheState;
         int nextGlobalMsgToProcess;
         int id; // id of cache
     public:
         unordered_map<ull, int> numInvToCollect;    // map from block address to number of invalidations to collect
-        bool lastMsgProcessed;
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         // this function only removes this addr from cache & returns if anything got evicted
@@ -157,14 +173,18 @@ class Cache {
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         // need proc since we need to pass it to message.handle() that would be called inside
         virtual bool process(Processor &proc) = 0;
-        Cache(int id, int numSets): id(id), cacheData(numSets), timeBlockAdded(numSets), nextGlobalMsgToProcess(0), numInvToCollect(0), lastMsgProcessed(false) {}
-        Cache(Cache &&other) noexcept : id(move(other.id)),
+        Cache(int id, int numSets): id(id),
+            cacheData(numSets),
+            timeBlockAdded(numSets),
+            nextGlobalMsgToProcess(0),
+            numInvToCollect(0) {}
+        Cache(Cache &&other) noexcept : incomingMsg(move(other.incomingMsg)),
+            id(move(other.id)),
             cacheData(move(other.cacheData)),
             timeBlockAdded(move(other.timeBlockAdded)),
             nextGlobalMsgToProcess(move(other.nextGlobalMsgToProcess)),
-            state(move(other.state)), 
             numInvToCollect(move(other.numInvToCollect)),
-            lastMsgProcessed(move(other.lastMsgProcessed)) {}
+            outstandingNacks(move(other.outstandingNacks)) {}
 };
 class L1 : public Cache {
     private:
@@ -205,8 +225,7 @@ class L1 : public Cache {
 class LLCBank : public Cache {
     private:
         friend class Get;
-        // AYUSH: instead of vector of map, directory could only be a map of address to DirEnt
-        unordered_map<ull, DirEnt>directory; // blockwise coherence. maps a block address to its entry.
+        vector<unordered_map<ull, DirEnt>>directory; // blockwise coherence. maps a block address to its entry.
     public:
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
@@ -250,9 +269,9 @@ class Processor {
 };
 
 // this wrapper would convert message to required type by taking ownership and then returns ownership
-#define CALL_HANDLER(MSG_TYPE) \
+#define CALL_HANDLER(MSG_TYPE, TO_L1) \
     unique_ptr<MSG_TYPE> inv_msg(static_cast<MSG_TYPE *>(msg.release())); \
-    inv_msg->handle(proc); \
+    inv_msg->handle(proc, TO_L1); \
     msg.reset(static_cast<Message *>(inv_msg.release()))
 
 bool L1::process(Processor &proc){
@@ -267,46 +286,43 @@ bool L1::process(Processor &proc){
         incomingMsg.pop_front();
         // cast unique pointer of base class to derived class with appropriate variables
         switch (msg->msgType) {
-            case Message::MsgType::INV: {
-                CALL_HANDLER(Inv);
+            case MsgType::INV: {
+                CALL_HANDLER(Inv, true);
                 break;
             }
-            case Message::MsgType::INV_ACK:{
-                CALL_HANDLER(Inv);
-                break;
-            }
-
-            case Message::MsgType::GET:{
-                CALL_HANDLER(Inv);
+            case MsgType::INV_ACK:{
+                CALL_HANDLER(Inv, true);
                 break;
             }
 
-            case Message::MsgType::NACK:{
+            case MsgType::GET:{
+                CALL_HANDLER(Inv, true);
                 break;
             }
 
-            case Message::MsgType::GETX:{
+            case MsgType::NACK:{
                 break;
             }
 
-            case Message::MsgType::PUT:{
+            case MsgType::GETX:{
                 break;
             }
 
-            case Message::MsgType::PUTX:{
+            case MsgType::PUT:{
                 break;
             }
 
-            case Message::MsgType::WB:{
+            case MsgType::PUTX:{
                 break;
             }
 
-            case Message::MsgType::WB_ACK:{
+            case MsgType::WB:{
                 break;
             }
-        }
-        if(!lastMsgProcessed){
-            incomingMsg.push_front(move(msg));
+
+            case MsgType::WB_ACK:{
+                break;
+            }
         }
     }
     return false;
@@ -318,68 +334,64 @@ bool LLCBank::process(Processor &proc){
     incomingMsg.pop_front();
     // cast unique pointer of base class to derived class with appropriate variables
     switch (msg->msgType) {
-        case Message::MsgType::INV: {
-            CALL_HANDLER(Inv);
+        case MsgType::INV: {
+            CALL_HANDLER(Inv, false);
             break;
         }
-        case Message::MsgType::INV_ACK:{
-            CALL_HANDLER(Inv);
-            break;
-        }
-
-        case Message::MsgType::GET:{
-            CALL_HANDLER(Inv);
+        case MsgType::INV_ACK:{
+            CALL_HANDLER(Inv, false);
             break;
         }
 
-        case Message::MsgType::NACK:{
+        case MsgType::GET:{
+            CALL_HANDLER(Inv, false);
             break;
         }
 
-        case Message::MsgType::GETX:{
+        case MsgType::NACK:{
             break;
         }
 
-        case Message::MsgType::PUT:{
+        case MsgType::GETX:{
             break;
         }
 
-        case Message::MsgType::PUTX:{
+        case MsgType::PUT:{
             break;
         }
 
-        case Message::MsgType::WB:{
+        case MsgType::PUTX:{
             break;
         }
 
-        case Message::MsgType::WB_ACK:{
+        case MsgType::WB:{
             break;
         }
-    }
-    if(!lastMsgProcessed){
-        incomingMsg.push_front(move(msg));
+
+        case MsgType::WB_ACK:{
+            break;
+        }
     }
     return false;
 }
 
-void Inv::handle(Processor &proc){
+void Inv::handle(Processor &proc, bool toL1){
     auto &l1 = proc.L1Caches[to];
     // evict from L1
     l1.evict(l1.set_from_addr(blockAddr), blockAddr);
     if(fromL1){    // if the message is sent by L1, it means it is because someone requested S/I -> M
         // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
-        unique_ptr<Message> inv_ack(new InvAck(Message::MsgType::INV_ACK, to, from, true, msgId, blockAddr));
+        unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, msgId, blockAddr));
         proc.L1Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
     }
     else {
         // generate inv ack to be sent to 'from' LLC
-        unique_ptr<Message> inv_ack(new InvAck(Message::MsgType::INV_ACK, to, from, true, msgId, blockAddr));
+        unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, msgId, blockAddr));
         proc.L2Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
     }
-    l1.lastMsgProcessed = true;
 }
 
-void InvAck::handle(Processor &proc){
+void InvAck::handle(Processor &proc, bool toL1){
     if(fromL1){
         auto &l1 = proc.L1Caches[to];
         assert(l1.numInvToCollect.contains(blockAddr)); // since we collect an invalidation this means that this entry should contain this block address
@@ -389,36 +401,51 @@ void InvAck::handle(Processor &proc){
         }
     }
     else {
-        // this shouldn't happen 
+        // this shouldn't happen
         assert(false);
     }
 }
 
-void Get::handle(Processor &proc){
+void Get::handle(Processor &proc, bool toL1){
     if(fromL1){ // this means message is sent to LLC bank
         auto &l2 = proc.L2Caches[to];
-        if(l2.directory.contains(blockAddr)){
-            if(l2.directory[blockAddr].dirty){
-                int owner = l2.directory[blockAddr].ownerId;
-                unique_ptr<Message> get(new Get(Message::MsgType::GET, to, owner, false, msgId, blockAddr));
+        auto st = l2.set_from_addr(blockAddr);
+        if(l2.directory[st].contains(blockAddr)){
+            if(l2.directory[st][blockAddr].dirty){
+                int owner = l2.directory[st][blockAddr].ownerId;
+                unique_ptr<Message> get(new Get(MsgType::GET, to, owner, false, msgId, blockAddr));
                 proc.L1Caches[get->to].incomingMsg.push_back(move(get));
-                l2.directory[blockAddr].pending = true;
-                l2.directory[blockAddr].bitVector.reset();
-                l2.directory[blockAddr].bitVector.set(from);
-                l2.directory[blockAddr].bitVector.set(owner);
-                l2.lastMsgProcessed = true;
+                l2.directory[st][blockAddr].pending = true;
+                l2.directory[st][blockAddr].bitVector.reset();
+                l2.directory[st][blockAddr].bitVector.set(from);
+                l2.directory[st][blockAddr].bitVector.set(owner);
             }
-            else if(l2.directory[blockAddr].pending){
-                l2.lastMsgProcessed = false;
+            else if(l2.directory[st][blockAddr].pending){
             }
         }
-        else {
-            unique_ptr<Message> put(new Put(Message::MsgType::PUT, to, from, false, msgId, blockAddr));
+        else if(l2.check_cache(blockAddr)) { // if present in cache but not in dir
+            unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, msgId, blockAddr));
+            l2.directory[st][blockAddr].ownerId = from;
+            l2.directory[st][blockAddr].dirty = true;
+            l2.directory[st][blockAddr].pending = false;
+            l2.directory[st][blockAddr].bitVector.reset();
             proc.L1Caches[put->to].incomingMsg.push_back(move(put));
-            l2.lastMsgProcessed = true;
+        }
+        else {
+            // TODO: evict, replace and update directory state.
         }
     }
     else {  // this means that message is an intervention
 
     }
 }
+
+// Increase counter after processing.
+// Maintain outstanding misses table.
+// remove message ID from message class, no need to look at order.In each cycle, exactly one machine access should be issued, increment counter.
+// For processing messages, in each cycle, deque one message from each queue, and process it.
+// Implement NACK. Remove lastMsgProcessed(Done, need to implement NACK).
+// maintain a nastruct ck table, {GetX/Get, block} -> countdown_timer. map<NACKStruct, timer> (done)
+// Maintain separate cache state, per block inside L1.
+// Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
+// Add boolean variable to CALL_HANDLE macro (toL1, invalidations).

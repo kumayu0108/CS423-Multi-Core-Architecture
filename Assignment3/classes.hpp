@@ -161,8 +161,9 @@ class Cache {
         struct outstandingMsgStruct {
             ull blockAddr; // this could depend on the context, in case of inv due to inclusivity, this could represent blockAddr to replace the replacedBlock with.
             int waitForNumMessages;
+            unordered_set<int> L1CacheNums; // depend upon context; for LLC inclusivity case, when inv acks are received, LLC would send block to these L1 caches.
             outstandingMsgStruct(outstandingMsgStruct && other) noexcept : 
-                blockAddr(move(other.blockAddr)), waitForNumMessages(move(other.waitForNumMessages)) {}
+                blockAddr(move(other.blockAddr)), waitForNumMessages(move(other.waitForNumMessages)), L1CacheNums(move(other.L1CacheNums)) {}
             outstandingMsgStruct(ull blockAddr, int waitForNumMessages) : 
                 blockAddr(blockAddr), waitForNumMessages(waitForNumMessages) {}
             outstandingMsgStruct() : 
@@ -174,7 +175,7 @@ class Cache {
         unordered_map<ull, State> cacheState;
         int id; // id of cache
     public:
-        unordered_map<ull, int> numInvToCollect;    // map from block address to number of invalidations to collect
+        // unordered_map<ull, int> numInvToCollect;    // map from block address to number of invalidations to collect
         unordered_map <MsgType, unordered_map <ull, outstandingMsgStruct>> outstadingMessages; // this would be a map from what messages are outstanding to a map from a struct to how many messages to wait (in case of INV) (required here since L2 needs to wait for Inv Ack for inclusivity)
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         virtual bool check_cache(ull addr) = 0;
@@ -217,8 +218,7 @@ class Cache {
         virtual bool process(Processor &proc) = 0;
         Cache(int id, int numSets): id(id),
             cacheData(numSets),
-            timeBlockAdded(numSets),
-            numInvToCollect(0) {}
+            timeBlockAdded(numSets) {}
         Cache(Cache &&other) noexcept : incomingMsg(move(other.incomingMsg)),
             id(move(other.id)),
             cacheData(move(other.cacheData)),
@@ -272,7 +272,7 @@ class LLCBank : public Cache {
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         bool process(Processor &proc);
-        void bring_from_mem_and_send_inv(Processor &proc, ull addr);
+        void bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum);
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK), directory(NUM_L2_SETS_PER_BANK) {}
         LLCBank(const LLCBank&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         LLCBank& operator=(const LLCBank&) = delete; // delete copy assignment ctor too.
@@ -430,10 +430,17 @@ bool LLCBank::process(Processor &proc){
     return false;
 }
 
-void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr){
+void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum){
     assert(!check_cache(addr));
     auto st = set_from_addr(addr);
     assert(cacheData[st].size() == NUM_L2_WAYS && timeBlockAdded[st].size() == NUM_L2_WAYS);
+    // check if we've already called this func for this address;
+    for(auto &it : outstadingMessages[MsgType::INV]) {
+        if(it.second.blockAddr == addr){
+            it.second.L1CacheNums.insert(L1CacheNum);
+            return;
+        }
+    }
     // Need to check if this has been called before and address to be evicted is also being evicted before. (waiting for inv acks)
     auto it = timeBlockAdded[st].begin();
     for( ; it != timeBlockAdded[st].end(); it++){
@@ -451,12 +458,14 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr){
         int owner = directory[st][blockAddr_to_be_replaced].ownerId;
         outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].waitForNumMessages = 1;
         outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].blockAddr = addr;
+        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].L1CacheNums.insert(L1CacheNum);
         unique_ptr<Message> inv(new Inv(MsgType::INV, owner, id, false, blockAddr_to_be_replaced));
         proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
     }
     else {
         outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].waitForNumMessages = directory[st][blockAddr_to_be_replaced].bitVector.count();
         outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].blockAddr = addr;
+        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].L1CacheNums.insert(L1CacheNum);
         for(int i = 0; i < directory[st][blockAddr_to_be_replaced].bitVector.size(); i++){
             if(!directory[st][blockAddr_to_be_replaced].bitVector.test(i)){ continue; }
             unique_ptr<Message> inv(new Inv(MsgType::INV, i, id, false, blockAddr_to_be_replaced));
@@ -486,7 +495,8 @@ void InvAck::handle(Processor &proc, bool toL1){
     if(fromL1){
         if(toL1){ // inv ack sent to another L1
             auto &l1 = proc.L1Caches[to];
-            assert(l1.numInvToCollect.contains(blockAddr)); // since we collect an invalidation this means that this entry should contain this block address
+            // since we collect an invalidation this means that this entry should contain this block address; HOWEVER, can inv acks arrive before invs?
+            assert(l1.outstadingMessages[MsgType::INV].contains(blockAddr)); 
             l1.numInvToCollect[blockAddr]--;
             if(l1.numInvToCollect[blockAddr] == 0){
                 l1.numInvToCollect.erase(blockAddr);
@@ -547,7 +557,7 @@ void Get::handle(Processor &proc, bool toL1){
                 proc.L1Caches[put->to].incomingMsg.push_back(move(put));
             }
             else {
-                l2.bring_from_mem_and_send_inv(proc, blockAddr);
+                l2.bring_from_mem_and_send_inv(proc, blockAddr, from);
             }
         }
     }
@@ -562,6 +572,7 @@ void Get::handle(Processor &proc, bool toL1){
 // For processing messages, in each cycle, deque one message from each queue, and process it. (done)
 // Implement NACK. Remove lastMsgProcessed(Done, need to implement NACK). (done)
 // maintain a nastruct ck table, {GetX/Get, block} -> countdown_timer. map<NACKStruct, timer> (done)
-// Maintain separate cache state, per block inside L1.
-// Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
 // Add boolean variable to CALL_HANDLE macro (toL1, invalidations). (done)
+// Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
+// Maintain separate cache state, per block inside L1. -> modify cacheData to contain a struct
+// split files.

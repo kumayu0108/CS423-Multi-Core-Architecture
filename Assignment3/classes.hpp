@@ -5,13 +5,15 @@
 #include <vector>
 #include <unordered_map>
 #include <map>
+#include <unordered_set>
 #include <set>
 #include <bitset>
 #include <iostream>
 #include <memory>
 #include <assert.h>
+#include <limits>
 
-using std::set, std::unordered_map, std::vector, std::deque, std::bitset, std::map;
+using std::set, std::unordered_map, std::vector, std::deque, std::bitset, std::map, std::unordered_set;
 using std::unique_ptr, std::make_unique, std::move;
 
 #define ull unsigned long long
@@ -20,8 +22,10 @@ using std::unique_ptr, std::make_unique, std::move;
 
 constexpr int NUM_L1_SETS = (1 << 6);   // each L1 cache
 constexpr ull L1_SET_BITS = 0x3f;
+constexpr unsigned NUM_L1_WAYS = 8;
 constexpr int NUM_L2_SETS_PER_BANK = (1 << 9);  // in each bank!
 constexpr int L2_SET_BITS = 0x1ff;
+constexpr unsigned NUM_L2_WAYS = 16;
 constexpr int LOG_L2_BANKS = 3;
 constexpr int MAX_PROC = 64;
 constexpr int LOG_BLOCK_SIZE = 6;
@@ -49,7 +53,7 @@ struct NACKStruct {
 
     NACKStruct(): msg(MsgType::GET), blockAddr(0) {}
     NACKStruct(NACKStruct&& other) noexcept: msg(move(other.msg)), blockAddr(move(other.blockAddr)) {}
-    bool operator<(const NACKStruct& other) { return blockAddr < other.blockAddr; }
+    bool operator<(const NACKStruct& other) { return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr); }
 };
 
 struct DirEnt {
@@ -154,6 +158,16 @@ class Cache {
     protected:
         // probably need these as public
         enum State {M, E, S, I};
+        struct outstandingMsgStruct {
+            ull blockAddr; // this could depend on the context, in case of inv due to inclusivity, this could represent blockAddr to replace the replacedBlock with.
+            int waitForNumMessages;
+            outstandingMsgStruct(outstandingMsgStruct && other) noexcept : 
+                blockAddr(move(other.blockAddr)), waitForNumMessages(move(other.waitForNumMessages)) {}
+            outstandingMsgStruct(ull blockAddr, int waitForNumMessages) : 
+                blockAddr(blockAddr), waitForNumMessages(waitForNumMessages) {}
+            outstandingMsgStruct() : 
+                blockAddr(0), waitForNumMessages(0) {}
+        };
         vector<unordered_map<ull, ull>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         map<NACKStruct, int> outstandingNacks;
@@ -161,6 +175,8 @@ class Cache {
         int id; // id of cache
     public:
         unordered_map<ull, int> numInvToCollect;    // map from block address to number of invalidations to collect
+        unordered_map <MsgType, unordered_map <ull, outstandingMsgStruct>> outstadingMessages; // this would be a map from what messages are outstanding to a map from a struct to how many messages to wait (in case of INV) (required here since L2 needs to wait for Inv Ack for inclusivity)
+        deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         // this function only removes this addr from cache & returns if anything got evicted
@@ -197,7 +213,6 @@ class Cache {
             timeBlockAdded[st].insert({nwTime, addr});
             cacheData[st][addr] = nwTime;
         }
-        deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         // need proc since we need to pass it to message.handle() that would be called inside
         virtual bool process(Processor &proc) = 0;
         Cache(int id, int numSets): id(id),
@@ -209,7 +224,8 @@ class Cache {
             cacheData(move(other.cacheData)),
             timeBlockAdded(move(other.timeBlockAdded)),
             numInvToCollect(move(other.numInvToCollect)),
-            outstandingNacks(move(other.outstandingNacks)) {}
+            outstandingNacks(move(other.outstandingNacks)),
+            outstadingMessages(move(other.outstadingMessages))  {}
 };
 
 class L1 : public Cache {
@@ -229,7 +245,6 @@ class L1 : public Cache {
             }
         }
     public:
-        unordered_map <MsgType, vector <ull>> outstadingMessages; // this would be a map from what messages are outstanding to a struct (which is currently only a block address, but could contain other things) 
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         bool process(Processor &proc);
@@ -242,8 +257,7 @@ class L1 : public Cache {
         L1(L1&& other) noexcept : Cache(move(other)),
             inputTrace(move(other.inputTrace)),
             tempSpace(move(other.tempSpace)),
-            logs(move(other.logs)),
-            outstadingMessages(move(other.outstadingMessages)) {
+            logs(move(other.logs)) {
                 for(int i = 0; i < MAX_BUF_L1 * sizeof(LogStruct) + 2; i++) {
                     buffer[i] = move(other.buffer[i]);
                 }
@@ -258,6 +272,7 @@ class LLCBank : public Cache {
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         bool process(Processor &proc);
+        void bring_from_mem_and_send_inv(Processor &proc, ull addr);
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK), directory(NUM_L2_SETS_PER_BANK) {}
         LLCBank(const LLCBank&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         LLCBank& operator=(const LLCBank&) = delete; // delete copy assignment ctor too.
@@ -267,6 +282,7 @@ class LLCBank : public Cache {
 
 class Processor {
     private:
+        friend class LLCBank;
         friend class Inv;
         friend class InvAck;
         friend class Get;
@@ -402,7 +418,7 @@ bool LLCBank::process(Processor &proc){
         case MsgType::PUTX:{
             break;
         }
-
+        // this wb could also be received in response to an Invalidation due to maintaining inclusivity.
         case MsgType::WB:{
             break;
         }
@@ -412,6 +428,41 @@ bool LLCBank::process(Processor &proc){
         }
     }
     return false;
+}
+
+void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr){
+    assert(!check_cache(addr));
+    auto st = set_from_addr(addr);
+    assert(cacheData[st].size() == NUM_L2_WAYS && timeBlockAdded[st].size() == NUM_L2_WAYS);
+    // Need to check if this has been called before and address to be evicted is also being evicted before. (waiting for inv acks)
+    auto it = timeBlockAdded[st].begin();
+    for( ; it != timeBlockAdded[st].end(); it++){
+        if(directory[st][it->second].pending){continue;}
+        if(outstadingMessages[MsgType::INV].contains(it->second)){continue;}
+        break;
+    }
+    if (it == timeBlockAdded[st].end()){
+        // AYUSH : I think this could happen when what if all the blocks are supposed to be invalidated in this set and are waiting for acks; we need to send nack then.
+        assert(false);
+    }
+    auto [time, blockAddr_to_be_replaced] = *it;
+    directory[st][blockAddr_to_be_replaced].pending = true;
+    if(directory[st][blockAddr_to_be_replaced].dirty) {
+        int owner = directory[st][blockAddr_to_be_replaced].ownerId;
+        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].waitForNumMessages = 1;
+        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].blockAddr = addr;
+        unique_ptr<Message> inv(new Inv(MsgType::INV, owner, id, false, blockAddr_to_be_replaced));
+        proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
+    }
+    else {
+        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].waitForNumMessages = directory[st][blockAddr_to_be_replaced].bitVector.count();
+        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].blockAddr = addr;
+        for(int i = 0; i < directory[st][blockAddr_to_be_replaced].bitVector.size(); i++){
+            if(!directory[st][blockAddr_to_be_replaced].bitVector.test(i)){ continue; }
+            unique_ptr<Message> inv(new Inv(MsgType::INV, i, id, false, blockAddr_to_be_replaced));
+            proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
+        }
+    }
 }
 
 void Inv::handle(Processor &proc, bool toL1){
@@ -433,12 +484,16 @@ void Inv::handle(Processor &proc, bool toL1){
 
 void InvAck::handle(Processor &proc, bool toL1){
     if(fromL1){
-        assert(toL1);
-        auto &l1 = proc.L1Caches[to];
-        assert(l1.numInvToCollect.contains(blockAddr)); // since we collect an invalidation this means that this entry should contain this block address
-        l1.numInvToCollect[blockAddr]--;
-        if(l1.numInvToCollect[blockAddr] == 0){
-            l1.numInvToCollect.erase(blockAddr);
+        if(toL1){ // inv ack sent to another L1
+            auto &l1 = proc.L1Caches[to];
+            assert(l1.numInvToCollect.contains(blockAddr)); // since we collect an invalidation this means that this entry should contain this block address
+            l1.numInvToCollect[blockAddr]--;
+            if(l1.numInvToCollect[blockAddr] == 0){
+                l1.numInvToCollect.erase(blockAddr);
+            }
+        }
+        else {  // inv ack sent to L2 (for inclusivity)
+
         }
     }
     else {
@@ -482,7 +537,18 @@ void Get::handle(Processor &proc, bool toL1){
         }
         else {
             // TODO: evict, replace and update directory state.
-
+            auto st = l2.set_from_addr(blockAddr);
+            if(l2.cacheData[st].size() < NUM_L2_WAYS){ // no need to send invalidations
+                unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, blockAddr));
+                l2.directory[st][blockAddr].ownerId = from;
+                l2.directory[st][blockAddr].dirty = true;
+                l2.directory[st][blockAddr].pending = false;
+                l2.directory[st][blockAddr].bitVector.reset();
+                proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+            }
+            else {
+                l2.bring_from_mem_and_send_inv(proc, blockAddr);
+            }
         }
     }
     else {  // this means that message is an intervention

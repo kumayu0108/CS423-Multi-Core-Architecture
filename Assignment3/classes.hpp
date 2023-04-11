@@ -13,12 +13,12 @@
 #include <assert.h>
 #include <limits>
 
-using std::set, std::unordered_map, std::vector, std::deque, std::bitset, std::map, std::unordered_set;
+using std::set, std::unordered_map, std::vector, std::deque, std::bitset, std::map, std::unordered_set, std::pair;
 using std::unique_ptr, std::make_unique, std::move;
 
 #define ull unsigned long long
-#define timeAddr std::pair<unsigned long, ull>
-#define blk std::pair<ull, bool>
+#define timeAddr pair<unsigned long, ull>
+#define blk pair<ull, bool>
 
 constexpr int NUM_L1_SETS = (1 << 6);   // each L1 cache
 constexpr ull L1_SET_BITS = 0x3f;
@@ -33,7 +33,7 @@ constexpr int MAX_BUF_L1 = 10;
 constexpr int NUM_CACHE = 8;
 int trace[MAX_PROC];
 
-enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
+enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX, UPGR, UPGR_ACK};
 
 // The data is logged in binary in the format of the following struct
 struct LogStruct {
@@ -141,6 +141,18 @@ class Put: public Message {
         Message(msgType, from, to, fromL1), blockAddr(blockId) {}
 };
 
+class Putx: public Message {
+    public:
+        ull blockAddr; // which cache block ADDR to be evicted?
+        void handle(Processor &proc, bool toL1);
+        Putx(const Putx&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        Putx& operator=(const Putx&) = delete; // delete copy assignment ctor too.
+        Putx() : Message() {}
+        Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
+        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId) :
+        Message(msgType, from, to, fromL1), blockAddr(blockId) {}
+};
+
 class Nack: public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
@@ -158,25 +170,18 @@ class Cache {
     protected:
         // probably need these as public
         enum State {M, E, S, I};
-        struct outstandingMsgStruct {
-            ull blockAddr; // this could depend on the context, in case of inv due to inclusivity, this could represent blockAddr to replace the replacedBlock with.
-            int waitForNumMessages;
-            unordered_set<int> L1CacheNums; // depend upon context; for LLC inclusivity case, when inv acks are received, LLC would send block to these L1 caches.
-            outstandingMsgStruct(outstandingMsgStruct && other) noexcept : 
-                blockAddr(move(other.blockAddr)), waitForNumMessages(move(other.waitForNumMessages)), L1CacheNums(move(other.L1CacheNums)) {}
-            outstandingMsgStruct(ull blockAddr, int waitForNumMessages) : 
-                blockAddr(blockAddr), waitForNumMessages(waitForNumMessages) {}
-            outstandingMsgStruct() : 
-                blockAddr(0), waitForNumMessages(0) {}
+        struct cacheBlock {
+            ull time; 
+            State state;
+            cacheBlock() : time(0), state(State::I) {}
+            cacheBlock(cacheBlock && other) noexcept : time(move(other.time)), state(move(other.state)) {}
         };
-        vector<unordered_map<ull, ull>> cacheData;    // addr -> time map
+        vector<unordered_map<ull, cacheBlock>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         map<NACKStruct, int> outstandingNacks;
         unordered_map<ull, State> cacheState;
         int id; // id of cache
     public:
-        // unordered_map<ull, int> numInvToCollect;    // map from block address to number of invalidations to collect
-        unordered_map <MsgType, unordered_map <ull, outstandingMsgStruct>> outstadingMessages; // this would be a map from what messages are outstanding to a map from a struct to how many messages to wait (in case of INV) (required here since L2 needs to wait for Inv Ack for inclusivity)
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
@@ -185,34 +190,34 @@ class Cache {
             ull st = set_from_addr(addr);
             assert(st < cacheData.size());
             if(!cacheData[st].contains(addr)){ return false; }
-            int time = cacheData[st][addr];
+            int time = cacheData[st][addr].time;
             assert(timeBlockAdded[st].contains({time, addr}));
             timeBlockAdded[st].erase({time, addr});
             return true;
         }
-        // this function replaces this addr from cache and returns the replaced address & flag stating valid block
-        blk replace(ull addr, ull timeAdded, int maxSetSize){
-            ull st = set_from_addr(addr);
-            assert(st < cacheData.size());
-            if(cacheData[st].size() < maxSetSize){cacheData[st][addr] = timeAdded; return {0, false};}
-            assert(cacheData[st].size() == maxSetSize and timeBlockAdded[st].size() == maxSetSize);
-            auto [time_evicted, addr_evicted] = *timeBlockAdded[st].begin();
-            assert(time_evicted < timeAdded);
-            timeBlockAdded.erase(timeBlockAdded.begin());
-            cacheData[st].erase(addr_evicted);
-            cacheData[st][addr] = timeAdded;
-            timeBlockAdded[st].insert({timeAdded, addr});
-            return {addr_evicted, true};
-        }
+        // // this function replaces this addr from cache and returns the replaced address & flag stating valid block
+        // blk replace(ull addr, ull timeAdded, int maxSetSize){
+        //     ull st = set_from_addr(addr);
+        //     assert(st < cacheData.size());
+        //     if(cacheData[st].size() < maxSetSize){cacheData[st][addr].time = timeAdded; return {0, false};}
+        //     assert(cacheData[st].size() == maxSetSize and timeBlockAdded[st].size() == maxSetSize);
+        //     auto [time_evicted, addr_evicted] = *timeBlockAdded[st].begin();
+        //     assert(time_evicted < timeAdded);
+        //     timeBlockAdded.erase(timeBlockAdded.begin());
+        //     cacheData[st].erase(addr_evicted);
+        //     cacheData[st][addr].time = timeAdded;
+        //     timeBlockAdded[st].insert({timeAdded, addr});
+        //     return {addr_evicted, true};
+        // }
         // AYUSH : Check the implementation
-        void update_priority(ull addr){ // this function updates the priority of address 
+        void update_priority(ull addr){ // this function updates the priority of address and shouldn't change cacheState
             ull st = set_from_addr(addr);
             assert(st < cacheData.size() && cacheData[st].contains(addr));
-            int time = cacheData[st][addr];
+            int time = cacheData[st][addr].time;
             timeBlockAdded[st].erase({time, addr});
             int nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
             timeBlockAdded[st].insert({nwTime, addr});
-            cacheData[st][addr] = nwTime;
+            cacheData[st][addr].time = nwTime;
         }
         // need proc since we need to pass it to message.handle() that would be called inside
         virtual bool process(Processor &proc) = 0;
@@ -223,9 +228,7 @@ class Cache {
             id(move(other.id)),
             cacheData(move(other.cacheData)),
             timeBlockAdded(move(other.timeBlockAdded)),
-            numInvToCollect(move(other.numInvToCollect)),
-            outstandingNacks(move(other.outstandingNacks)),
-            outstadingMessages(move(other.outstadingMessages))  {}
+            outstandingNacks(move(other.outstandingNacks)) {}
 };
 
 class L1 : public Cache {
@@ -245,6 +248,7 @@ class L1 : public Cache {
             }
         }
     public:
+        unordered_map<ull, ull> numInvToCollect; // block -> num; used when we want to collect inv acks for Get request.
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         bool process(Processor &proc);
@@ -257,6 +261,7 @@ class L1 : public Cache {
         L1(L1&& other) noexcept : Cache(move(other)),
             inputTrace(move(other.inputTrace)),
             tempSpace(move(other.tempSpace)),
+            numInvToCollect(move(other.numInvToCollect)),
             logs(move(other.logs)) {
                 for(int i = 0; i < MAX_BUF_L1 * sizeof(LogStruct) + 2; i++) {
                     buffer[i] = move(other.buffer[i]);
@@ -266,17 +271,30 @@ class L1 : public Cache {
 };
 class LLCBank : public Cache {
     private:
+        struct InvAckInclStruct {
+            ull blockAddr; // this could depend on the context, in case of inv due to inclusivity, this could represent blockAddr to replace the replacedBlock with.
+            int waitForNumMessages;
+            set<pair<int, bool>> L1CacheNums; // depend upon context; for LLC inclusivity case, when inv acks are received, LLC would send block to these L1 caches.
+            InvAckInclStruct(InvAckInclStruct && other) noexcept : 
+                blockAddr(move(other.blockAddr)), waitForNumMessages(move(other.waitForNumMessages)), L1CacheNums(move(other.L1CacheNums)) {}
+            InvAckInclStruct(ull blockAddr, int waitForNumMessages) : 
+                blockAddr(blockAddr), waitForNumMessages(waitForNumMessages) {}
+            InvAckInclStruct() : 
+                blockAddr(0), waitForNumMessages(0) {}
+        };
         friend class Get;
         vector<unordered_map<ull, DirEnt>>directory; // blockwise coherence. maps a block address to its entry.
     public:
+        unordered_map <ull, InvAckInclStruct> numInvAcksToCollectForIncl; // this would be a map from what messages are outstanding to a map from a struct to how many messages to wait (in case of INV) (required here since L2 needs to wait for Inv Ack for inclusivity)
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
         bool process(Processor &proc);
-        void bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum);
+        void bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum, bool Getx = false);
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK), directory(NUM_L2_SETS_PER_BANK) {}
         LLCBank(const LLCBank&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         LLCBank& operator=(const LLCBank&) = delete; // delete copy assignment ctor too.
-        LLCBank(LLCBank &&other) noexcept : Cache(move(other)), directory(move(other.directory)) {}
+        LLCBank(LLCBank &&other) noexcept : 
+            Cache(move(other)), directory(move(other.directory)), numInvAcksToCollectForIncl(move(other.numInvAcksToCollectForIncl)) {}
         ~LLCBank(){}
 };
 
@@ -331,6 +349,14 @@ bool L1::process(Processor &proc){
     if(!logs.empty() and proc.nextGlobalMsgToProcess >= logs.front().time){ // process from trace
         if(proc.nextGlobalMsgToProcess == logs.front().time){proc.nextGlobalMsgToProcess++;}
         progress = true;
+        auto log = logs.front();
+        logs.pop_front();
+        if(log.isStore){
+
+        }
+        else {
+            
+        }
     }
     if(!incomingMsg.empty()){ 
         progress = true;
@@ -430,14 +456,19 @@ bool LLCBank::process(Processor &proc){
     return false;
 }
 
-void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum){
+void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum, bool Getx){
     assert(!check_cache(addr));
     auto st = set_from_addr(addr);
     assert(cacheData[st].size() == NUM_L2_WAYS && timeBlockAdded[st].size() == NUM_L2_WAYS);
     // check if we've already called this func for this address;
-    for(auto &it : outstadingMessages[MsgType::INV]) {
+    for(auto &it : numInvAcksToCollectForIncl) {
         if(it.second.blockAddr == addr){
-            it.second.L1CacheNums.insert(L1CacheNum);
+            if(Getx){
+                // AYUSH : What to do here? NACKS?
+            }
+            else {
+              it.second.L1CacheNums.insert({L1CacheNum, Getx});
+            }
             return;
         }
     }
@@ -445,27 +476,28 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
     auto it = timeBlockAdded[st].begin();
     for( ; it != timeBlockAdded[st].end(); it++){
         if(directory[st][it->second].pending){continue;}
-        if(outstadingMessages[MsgType::INV].contains(it->second)){continue;}
+        if(numInvAcksToCollectForIncl.contains(it->second)){continue;}
         break;
     }
     if (it == timeBlockAdded[st].end()){
-        // AYUSH : I think this could happen when what if all the blocks are supposed to be invalidated in this set and are waiting for acks; we need to send nack then.
+        // AYUSH : I think this could happen when what if all the blocks are supposed to be invalidated in this set and are waiting for acks; do we need to send nack then?
         assert(false);
     }
     auto [time, blockAddr_to_be_replaced] = *it;
     directory[st][blockAddr_to_be_replaced].pending = true;
+    auto &inv_ack_struct = numInvAcksToCollectForIncl[blockAddr_to_be_replaced];
     if(directory[st][blockAddr_to_be_replaced].dirty) {
         int owner = directory[st][blockAddr_to_be_replaced].ownerId;
-        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].waitForNumMessages = 1;
-        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].blockAddr = addr;
-        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].L1CacheNums.insert(L1CacheNum);
+        inv_ack_struct.waitForNumMessages = 1;
+        inv_ack_struct.blockAddr = addr;
+        inv_ack_struct.L1CacheNums.insert({L1CacheNum, Getx});
         unique_ptr<Message> inv(new Inv(MsgType::INV, owner, id, false, blockAddr_to_be_replaced));
         proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
     }
     else {
-        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].waitForNumMessages = directory[st][blockAddr_to_be_replaced].bitVector.count();
-        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].blockAddr = addr;
-        outstadingMessages[MsgType::INV][blockAddr_to_be_replaced].L1CacheNums.insert(L1CacheNum);
+        inv_ack_struct.waitForNumMessages = directory[st][blockAddr_to_be_replaced].bitVector.count();
+        inv_ack_struct.blockAddr = addr;
+        inv_ack_struct.L1CacheNums.insert({L1CacheNum, Getx});
         for(int i = 0; i < directory[st][blockAddr_to_be_replaced].bitVector.size(); i++){
             if(!directory[st][blockAddr_to_be_replaced].bitVector.test(i)){ continue; }
             unique_ptr<Message> inv(new Inv(MsgType::INV, i, id, false, blockAddr_to_be_replaced));
@@ -496,14 +528,32 @@ void InvAck::handle(Processor &proc, bool toL1){
         if(toL1){ // inv ack sent to another L1
             auto &l1 = proc.L1Caches[to];
             // since we collect an invalidation this means that this entry should contain this block address; HOWEVER, can inv acks arrive before invs?
-            assert(l1.outstadingMessages[MsgType::INV].contains(blockAddr)); 
+            assert(l1.numInvToCollect.contains(blockAddr)); 
             l1.numInvToCollect[blockAddr]--;
             if(l1.numInvToCollect[blockAddr] == 0){
                 l1.numInvToCollect.erase(blockAddr);
             }
         }
         else {  // inv ack sent to L2 (for inclusivity)
-
+            auto &l2 = proc.L2Caches[to];
+            assert(l2.numInvAcksToCollectForIncl.contains(blockAddr));
+            auto &inv_ack_struct = l2.numInvAcksToCollectForIncl[blockAddr];
+            inv_ack_struct.waitForNumMessages--;
+            if(inv_ack_struct.waitForNumMessages == 0){  // all inv acks received
+                if(inv_ack_struct.L1CacheNums.begin()->second){ // Getx request
+                    assert(inv_ack_struct.L1CacheNums.size() == 1); // only 1 Getx can be served
+                    int l1_ind_to_send = inv_ack_struct.L1CacheNums.begin()->first;
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_ind_to_send, false, inv_ack_struct.blockAddr));
+                    proc.L1Caches[l1_ind_to_send].incomingMsg.push_back(move(putx));
+                }
+                else {  // Get request
+                    for(auto &[l1_ind_to_send, getx] : inv_ack_struct.L1CacheNums){
+                        assert(!getx);
+                        unique_ptr<Message> put(new Put(MsgType::PUT, to, l1_ind_to_send, false, inv_ack_struct.blockAddr));
+                        proc.L1Caches[l1_ind_to_send].incomingMsg.push_back(move(put));
+                    }
+                }
+            }
         }
     }
     else {
@@ -514,41 +564,31 @@ void InvAck::handle(Processor &proc, bool toL1){
 
 void Get::handle(Processor &proc, bool toL1){
     if(fromL1){ // this means message is sent to LLC bank
-        assert(!toL1); // L1 won't send Get to L1
-        auto &l2 = proc.L2Caches[to];
-        auto st = l2.set_from_addr(blockAddr);
-        if(l2.directory[st].contains(blockAddr)){
-            if(l2.directory[st][blockAddr].dirty){
-                int owner = l2.directory[st][blockAddr].ownerId;
-                unique_ptr<Message> get(new Get(MsgType::GET, to, owner, false, blockAddr));
-                l2.directory[st][blockAddr].pending = true;
-                l2.directory[st][blockAddr].bitVector.reset();
-                l2.directory[st][blockAddr].bitVector.set(from);
-                l2.directory[st][blockAddr].bitVector.set(owner);
-                proc.L1Caches[get->to].incomingMsg.push_back(move(get));
-            }
-            else if(l2.directory[st][blockAddr].pending){
-                unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::GET, to, from, false, blockAddr));
-                proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
-            }
-            else {
-                unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, blockAddr));
-                l2.directory[st][blockAddr].bitVector.set(from);
-                proc.L1Caches[put->to].incomingMsg.push_back(move(put));
-            }
-        }
-        else if(l2.check_cache(blockAddr)) { // if present in cache but not in dir
-            unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, blockAddr));
-            l2.directory[st][blockAddr].ownerId = from;
-            l2.directory[st][blockAddr].dirty = true;
-            l2.directory[st][blockAddr].pending = false;
-            l2.directory[st][blockAddr].bitVector.reset();
-            proc.L1Caches[put->to].incomingMsg.push_back(move(put));
-        }
-        else {
-            // TODO: evict, replace and update directory state.
+        // assert(toL1); // L1 won't send Get to L1; but L2 would send Get to L1 masking itself as L1
+        if(!toL1){
+            auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
-            if(l2.cacheData[st].size() < NUM_L2_WAYS){ // no need to send invalidations
+            if(l2.directory[st].contains(blockAddr)){
+                if(l2.directory[st][blockAddr].dirty){
+                    int owner = l2.directory[st][blockAddr].ownerId;
+                    unique_ptr<Message> get(new Get(MsgType::GET, from, owner, true, blockAddr)); // L2 masks itself as the requestor
+                    l2.directory[st][blockAddr].pending = true;
+                    l2.directory[st][blockAddr].bitVector.reset();
+                    l2.directory[st][blockAddr].bitVector.set(from);
+                    l2.directory[st][blockAddr].bitVector.set(owner);
+                    proc.L1Caches[get->to].incomingMsg.push_back(move(get));
+                }
+                else if(l2.directory[st][blockAddr].pending){
+                    unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::GET, to, from, false, blockAddr));
+                    proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
+                }
+                else {
+                    unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, blockAddr));
+                    l2.directory[st][blockAddr].bitVector.set(from);
+                    proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                }
+            }
+            else if(l2.check_cache(blockAddr)) { // if present in cache but not in dir
                 unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, blockAddr));
                 l2.directory[st][blockAddr].ownerId = from;
                 l2.directory[st][blockAddr].dirty = true;
@@ -557,15 +597,42 @@ void Get::handle(Processor &proc, bool toL1){
                 proc.L1Caches[put->to].incomingMsg.push_back(move(put));
             }
             else {
-                l2.bring_from_mem_and_send_inv(proc, blockAddr, from);
+                // TODO: evict, replace and update directory state.
+                auto st = l2.set_from_addr(blockAddr);
+                if(l2.cacheData[st].size() < NUM_L2_WAYS){ // no need to send invalidations
+                    unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, blockAddr));
+                    l2.directory[st][blockAddr].ownerId = from;
+                    l2.directory[st][blockAddr].dirty = true;
+                    l2.directory[st][blockAddr].pending = false;
+                    l2.directory[st][blockAddr].bitVector.reset();
+                    proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                }
+                else {
+                    l2.bring_from_mem_and_send_inv(proc, blockAddr, from);
+                }
             }
         }
-    }
-    else {  // this means that message is an intervention
+        else {  // this is the case where L2 had earlier sent a Get to owner cacheBlock and it saw this Get as being received from requestor L1
 
+            
+        }
+    }
+    else {  // this should not happen since whenever L2 sends a Get to L1, it masks itself as the requestor L1, to let the receiver of Get know whom to send the message.
+        assert(false);
     }
 }
 
+void Put::handle(Processor &proc, bool toL1) {
+
+}
+
+void Putx::handle(Processor &proc, bool toL1) {
+
+}
+
+void Nack::handle(Processor &proc, bool toL1) {
+
+}
 // Increase counter after processing. (done)
 // Maintain outstanding misses table. (done)
 // remove message ID from message class, no need to look at order.In each cycle, exactly one machine access should be issued, increment counter. (done)
@@ -574,5 +641,5 @@ void Get::handle(Processor &proc, bool toL1){
 // maintain a nastruct ck table, {GetX/Get, block} -> countdown_timer. map<NACKStruct, timer> (done)
 // Add boolean variable to CALL_HANDLE macro (toL1, invalidations). (done)
 // Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
-// Maintain separate cache state, per block inside L1. -> modify cacheData to contain a struct
+// Maintain separate cache state, per block inside L1. -> modify cacheData to contain a struct (done)
 // split files.

@@ -1,0 +1,10 @@
+Increase counter after processing. (done)
+Maintain outstanding misses table. (done)
+remove message ID from message class, no need to look at order.In each cycle, exactly one machine access should be issued, increment counter. (done)
+For processing messages, in each cycle, deque one message from each queue, and process it. (done)
+Implement NACK. Remove lastMsgProcessed(Done, need to implement NACK). (done)
+maintain a nastruct ck table, {GetX/Get, block} -> countdown_timer. map<NACKStruct, timer> (done)
+Add boolean variable to CALL_HANDLE macro (toL1, invalidations). (done)
+Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
+Maintain separate cache state, per block inside L1. -> modify cacheData to contain a struct
+split files. (done)

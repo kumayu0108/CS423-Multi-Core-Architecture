@@ -1,10 +1,17 @@
-// Increase counter after processing. (done)
-// Maintain outstanding misses table. (done)
-// remove message ID from message class, no need to look at order.In each cycle, exactly one machine access should be issued, increment counter. (done)
-// For processing messages, in each cycle, deque one message from each queue, and process it. (done)
-// Implement NACK. Remove lastMsgProcessed(Done, need to implement NACK). (done)
-// maintain a nastruct ck table, {GetX/Get, block} -> countdown_timer. map<NACKStruct, timer> (done)
-// Add boolean variable to CALL_HANDLE macro (toL1, invalidations). (done)
-// Maintain separate cache state, per block inside L1. -> modify cacheData to contain a struct (done)
-// Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
-// split files. (done)
+Increase counter after processing. (done)
+Maintain outstanding misses table. (done)
+remove message ID from message class, no need to look at order.In each cycle, exactly one machine access should be issued, increment counter. (done)
+For processing messages, in each cycle, deque one message from each queue, and process it. (done)
+Implement NACK. Remove lastMsgProcessed(Done, need to implement NACK). (done)
+maintain a nastruct ck table, {GetX/Get, block} -> countdown_timer. map<NACKStruct, timer> (done)
+Add boolean variable to CALL_HANDLE macro (toL1, invalidations). (done)
+Maintain separate cache state, per block inside L1. -> modify cacheData to contain a struct (done)
+Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
+split files. (done)
+
+Check for every handle func if directory is properly maintained.
+Check for every handle func if cacheState is properly maintained.
+Check that we erase members from data structures also if we add them
+Don't reset directory entries that we are done with, since we would use them for writeback forwarding
+Need to have a data structure (L1) to check if we have already sent out a Get/Getx from L1 and need to invalidate them on receiving Put/Putx ; This structure couldalso be used to properly maintain the cache state on receiving Put/Putx. 
+Putx can be generated as a reply to Get if there are no sharers. Do appropriate changes for handlers for Put and Putx.

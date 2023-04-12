@@ -11,6 +11,7 @@ bool Cache::evict(ull addr){
     if(!cacheData[st].contains(addr)){ return false; }
     int time = cacheData[st][addr].time;
     assert(timeBlockAdded[st].contains({time, addr}));
+    cacheData[st].erase(addr);
     timeBlockAdded[st].erase({time, addr});
     return true;
 }
@@ -115,9 +116,9 @@ bool L1::check_cache(ull addr){
             (cacheData[set_from_addr(addr)].contains(addr) and cacheData[set_from_addr(addr)][addr].state != State::I));
     return cacheData[set_from_addr(addr)].contains(addr);
 }
-// int L1::get_llc_bank(ull addr) {
-//     return ();
-// }
+int L1::get_llc_bank(ull addr) {
+    return ((addr >> LOG_BLOCK_SIZE) & L2_BANK_BITS);
+}
 bool LLCBank::process(Processor &proc){
     // since msgId isn't associated with messages, we can always process a message.
     // if(nextGlobalMsgToProcess < incomingMsg.front()->msgId){ return false; }
@@ -174,7 +175,9 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
     for(auto &it : numInvAcksToCollectForIncl) {
         if(it.second.blockAddr == addr){
             if(Getx){
-                // AYUSH : What to do here? NACKS?
+                // AYUSH : What to do here? NACKS? (doing nacks for now)
+                unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::GETX, id, L1CacheNum, false, addr));
+                proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
             }
             else {
               it.second.L1CacheNums.insert({L1CacheNum, Getx});
@@ -190,10 +193,13 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
         break;
     }
     if (it == timeBlockAdded[st].end()){
-        // AYUSH : I think this could happen when what if all the blocks are supposed to be invalidated in this set and are waiting for acks; do we need to send nack then?
+        // AYUSH : I think this could happen when what if all the blocks are supposed to be invalidated in this set and are waiting for acks; do we need to send nack then? (doing nacks for now)
+        unique_ptr<Message> nack(new Nack(MsgType::NACK, (Getx ? MsgType::GETX : MsgType::GET), id, L1CacheNum, false, addr));
+        proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
         assert(false);
     }
     auto [time, blockAddr_to_be_replaced] = *it;
+    // AYUSH : would this cause any issue?
     directory[st][blockAddr_to_be_replaced].pending = true;
     auto &inv_ack_struct = numInvAcksToCollectForIncl[blockAddr_to_be_replaced];
     if(directory[st][blockAddr_to_be_replaced].dirty) {
@@ -201,7 +207,7 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
         inv_ack_struct.waitForNumMessages = 1;
         inv_ack_struct.blockAddr = addr;
         inv_ack_struct.L1CacheNums.insert({L1CacheNum, Getx});
-        unique_ptr<Message> inv(new Inv(MsgType::INV, owner, id, false, blockAddr_to_be_replaced));
+        unique_ptr<Message> inv(new Inv(MsgType::INV, id, owner, false, blockAddr_to_be_replaced));
         proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
     }
     else {
@@ -210,7 +216,7 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
         inv_ack_struct.L1CacheNums.insert({L1CacheNum, Getx});
         for(int i = 0; i < directory[st][blockAddr_to_be_replaced].bitVector.size(); i++){
             if(!directory[st][blockAddr_to_be_replaced].bitVector.test(i)){ continue; }
-            unique_ptr<Message> inv(new Inv(MsgType::INV, i, id, false, blockAddr_to_be_replaced));
+            unique_ptr<Message> inv(new Inv(MsgType::INV, id, i, false, blockAddr_to_be_replaced));
             proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
         }
     }
@@ -229,5 +235,5 @@ void Processor::run() {
         }
         numCycles++;
         if(!progressMade){break;}
-}
+    }
 }

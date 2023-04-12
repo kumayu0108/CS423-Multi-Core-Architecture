@@ -22,15 +22,16 @@ using std::unique_ptr, std::make_unique, std::move;
 #define blk std::pair<ull, bool>
 
 constexpr int NUM_L1_SETS = (1 << 6);   // each L1 cache
-constexpr ull L1_SET_BITS = 0x3f;
-constexpr unsigned NUM_L1_WAYS = 8;
 constexpr int NUM_L2_SETS_PER_BANK = (1 << 9);  // in each bank!
+constexpr ull L1_SET_BITS = 0x3f;
 constexpr int L2_SET_BITS = 0x1ff;
+constexpr unsigned NUM_L1_WAYS = 8;
 constexpr unsigned NUM_L2_WAYS = 16;
+constexpr int MAX_BUF_L1 = 10;
 constexpr int LOG_L2_BANKS = 3;
 constexpr int MAX_PROC = 64;
 constexpr int LOG_BLOCK_SIZE = 6;
-constexpr int MAX_BUF_L1 = 10;
+constexpr int L2_BANK_BITS = 0x7;
 constexpr int NUM_CACHE = 8;
 int trace[MAX_PROC];
 
@@ -144,6 +145,18 @@ class Get : public Message {
             Message(msgType, from, to, fromL1), blockAddr(blockId) {}
 };
 
+class Getx : public Message {
+    public:
+        ull blockAddr; // which cache block ADDR to be evicted?
+        void handle(Processor &proc, bool toL1);
+        Getx(const Getx&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        Getx& operator=(const Getx&) = delete; // delete copy assignment ctor too.
+        Getx() : Message() {}
+        Getx(Getx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
+        Getx(MsgType msgType, int from, int to, bool fromL1, ull blockId) :
+            Message(msgType, from, to, fromL1), blockAddr(blockId) {}
+};
+
 class Put: public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
@@ -159,13 +172,14 @@ class Put: public Message {
 class Putx: public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
+        int numInvToCollect;
         void handle(Processor &proc, bool toL1);
         Putx(const Putx&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Putx& operator=(const Putx&) = delete; // delete copy assignment ctor too.
         Putx() : Message() {}
-        Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
-        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId) :
-        Message(msgType, from, to, fromL1), blockAddr(blockId) {}
+        Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numInvToCollect(move(other.numInvToCollect)) {}
+        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numInvToCollect) :
+        Message(msgType, from, to, fromL1), blockAddr(blockId), numInvToCollect(numInvToCollect) {}
 };
 
 class Nack: public Message {
@@ -193,7 +207,7 @@ class Cache {
         vector<unordered_map<ull, cacheBlock>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         map<NACKStruct, int> outstandingNacks;
-        unordered_map<ull, State> cacheState;
+        // unordered_map<ull, State> cacheState; // not required, already maintained in cacheBlock. 
         int id; // id of cache
     public:
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
@@ -232,10 +246,11 @@ class L1 : public Cache {
             }
         }
     public:
-        unordered_map<ull, ull> numInvToCollect; // block -> num; used when we want to collect inv acks for Get request.
+        unordered_map<ull, ull> numInvToCollect; // block -> num; used when we want to collect inv acks for Getx request.
+        unordered_set<ull> writeBackAckWait; // wait for wb ack;
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr);
-        // int get_llc_bank(ull addr);
+        int get_llc_bank(ull addr);
         bool process(Processor &proc);
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
@@ -257,6 +272,7 @@ class L1 : public Cache {
 class LLCBank : public Cache {
     private:
         friend class Get;
+        friend class Getx;
         friend class InvAck;
         friend class Inv;
         struct InvAckInclStruct {
@@ -291,6 +307,7 @@ class Processor {
         friend class Inv;
         friend class InvAck;
         friend class Get;
+        friend class Getx;
         int numCycles; // number of Cycles
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;

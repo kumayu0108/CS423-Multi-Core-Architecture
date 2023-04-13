@@ -253,6 +253,10 @@ class L1 : public Cache {
             }
         }
     public:
+        // getReplyWait and getXReplyWait would be used to check if there is a previous Get/Getx request. They would get cleared on Put/Putx.
+        unordered_set<ull> getReplyWait;
+        unordered_set<ull> getXReplyWait;
+        unordered_set<ull> upgrReplyWait;
         unordered_map<ull, ull> numInvToCollect; // block -> num; used when we want to collect inv acks for Getx request.
         unordered_set<ull> writeBackAckWait; // wait for wb ack;
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
@@ -269,6 +273,9 @@ class L1 : public Cache {
             inputTrace(move(other.inputTrace)),
             tempSpace(move(other.tempSpace)),
             numInvToCollect(move(other.numInvToCollect)),
+            getReplyWait(move(other.getReplyWait)),
+            getXReplyWait(move(other.getXReplyWait)),
+            upgrReplyWait(move(other.upgrReplyWait)),
             logs(move(other.logs)) {
                 for(int i = 0; i < MAX_BUF_L1 * sizeof(LogStruct) + 2; i++) {
                     buffer[i] = move(other.buffer[i]);

@@ -84,28 +84,35 @@ void Put::handle(Processor &proc, bool toL1) {
     // VPG : make replace function virtual in Cache class.
     // in GET handle, we have a branch where we replace block and send invs to blocks.
     // basically replace for L2. Put needs us to write replace for L1 basically. Can split into two fns for reuse.
-    if(!toL1) {assert(false); return; } // an LLC can never receive PUT. It's usually a reply w data.
-    // L1 is the only receiver, gets data as a block. Now need to place it somewhere.
-    auto &l1 = proc.L1Caches[to];
-    //if the block already exists, do nothing. (is this even possible?)
-    if(l1.check_cache(blockAddr)) { return; }
-    auto st = l1.set_from_addr(blockAddr);
-    auto &cacheData  = l1.cacheData;
-    auto &timeBlockAdded = l1.timeBlockAdded;
-    if(cacheData[st].size() < NUM_L1_WAYS) { // no need to evict, need to create new cache block
-        ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
-        // update cache state correctly.
-        timeBlockAdded[st].insert({nwTime, blockAddr});
-        // we get put request only if in S state in directory.
-        cacheData[st][blockAddr] = {nwTime, State::S};
+    if(toL1) { 
+        // L1 is the only receiver, gets data as a block. Now need to place it somewhere.
+        auto &l1 = proc.L1Caches[to];
+        //if the block already exists, do nothing. (is this even possible?)
+        if(l1.check_cache(blockAddr)) { return; }
+        assert(l1.getReplyWait.contains(blockAddr));  // since put would only be a reply to Get.
+        l1.getReplyWait.erase(blockAddr);
+
+        auto st = l1.set_from_addr(blockAddr);
+        auto &cacheData  = l1.cacheData;
+        auto &timeBlockAdded = l1.timeBlockAdded;
+        if(cacheData[st].size() < NUM_L1_WAYS) { // no need to evict, need to create new cache block
+            ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+            // update cache state correctly.
+            timeBlockAdded[st].insert({nwTime, blockAddr});
+            // we get put request only if in S state in directory.
+            cacheData[st][blockAddr] = {nwTime, State::S};
+        }
+        // evict and replace. Correct This
+        l1.evict(blockAddr); // update priority and all that.
+        int l2_bank = l1.get_llc_bank(blockAddr); // get LLc bank.
+        unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr));
+        proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+        assert(!l1.writeBackAckWait.contains(blockAddr));
+        l1.writeBackAckWait.insert(blockAddr);
     }
-    // evict and replace.
-    l1.evict(blockAddr); // update priority and all that.
-    int l2_bank = l1.get_llc_bank(blockAddr); // get LLc bank.
-    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr));
-    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
-    assert(!l1.writeBackAckWait.contains(blockAddr));
-    l1.writeBackAckWait.insert(blockAddr);
+    else { // an LLC can never receive PUT. It's usually a reply w data.
+        assert(false); return;
+    }
 }
 
 // update priority for cache blocks

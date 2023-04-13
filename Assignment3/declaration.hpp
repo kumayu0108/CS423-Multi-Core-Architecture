@@ -159,14 +159,14 @@ class Getx : public Message {
 
 class Put: public Message {
     public:
-        ull blockAddr; // which cache block ADDR to be evicted?
+        ull blockAddr; // which cache block ADDR
         void handle(Processor &proc, bool toL1);
         Put(const Put&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Put& operator=(const Put&) = delete; // delete copy assignment ctor too.
         Put() : Message() {}
         Put(Put&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
-        Put(MsgType msgType, int from, int to, bool fromL1, ull blockId) :
-        Message(msgType, from, to, fromL1), blockAddr(blockId) {}
+        Put(MsgType msgType, int from, int to, bool fromL1, ull blockAddr) :
+        Message(msgType, from, to, fromL1), blockAddr(blockAddr) {}
 };
 
 class Putx: public Message {
@@ -202,12 +202,18 @@ class Cache {
             ull time;
             State state;
             cacheBlock() : time(0), state(State::I) {}
+            cacheBlock(ull time, State state) : time(time), state(state) {};
+            cacheBlock& operator=(const cacheBlock& other) {//time(other.time), state(other.state) { return *this;}
+                time = other.time;
+                state = other.state;
+                return *this;
+            }
             cacheBlock(cacheBlock && other) noexcept : time(move(other.time)), state(move(other.state)) {}
         };
         vector<unordered_map<ull, cacheBlock>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         map<NACKStruct, int> outstandingNacks;
-        // unordered_map<ull, State> cacheState; // not required, already maintained in cacheBlock. 
+        // unordered_map<ull, State> cacheState; // not required, already maintained in cacheBlock.
         int id; // id of cache
     public:
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
@@ -231,6 +237,7 @@ class Cache {
 class L1 : public Cache {
     private:
         friend class Get;
+        friend class Put;
         int inputTrace; // from where you would read line to line
         char buffer[MAX_BUF_L1 * sizeof(LogStruct) + 2];
         deque<LogStruct> logs;
@@ -273,6 +280,7 @@ class LLCBank : public Cache {
     private:
         friend class Get;
         friend class Getx;
+        friend class Put;
         friend class InvAck;
         friend class Inv;
         struct InvAckInclStruct {
@@ -305,6 +313,7 @@ class Processor {
     private:
         friend class LLCBank;
         friend class Inv;
+        friend class Put;
         friend class InvAck;
         friend class Get;
         friend class Getx;

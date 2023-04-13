@@ -33,9 +33,9 @@ bool Cache::evict(ull addr){
 void Cache::update_priority(ull addr){ // this function updates the priority of address
     ull st = set_from_addr(addr);
     assert(st < cacheData.size() && cacheData[st].contains(addr));
-    int time = cacheData[st][addr].time;
+    ull time = cacheData[st][addr].time;
     timeBlockAdded[st].erase({time, addr});
-    int nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+    ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
     timeBlockAdded[st].insert({nwTime, addr});
     cacheData[st][addr].time = nwTime;
 }

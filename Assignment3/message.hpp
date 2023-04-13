@@ -5,7 +5,6 @@ bool NACKStruct::operator<(const NACKStruct& other) {
     return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr);
 }
 
-void Put::handle(Processor &proc, bool toL1) {}
 void Putx::handle(Processor &proc, bool toL1) {}
 void Nack::handle(Processor &proc, bool toL1) {}
 void Wb::handle(Processor &proc, bool toL1) {}
@@ -80,6 +79,35 @@ void InvAck::handle(Processor &proc, bool toL1) {
     }
 }
 
+// update priority for cache block when evicted.
+void Put::handle(Processor &proc, bool toL1) {
+    // VPG : make replace function virtual in Cache class.
+    // in GET handle, we have a branch where we replace block and send invs to blocks.
+    // basically replace for L2. Put needs us to write replace for L1 basically. Can split into two fns for reuse.
+    if(!toL1) {assert(false); return; } // an LLC can never receive PUT. It's usually a reply w data.
+    // L1 is the only receiver, gets data as a block. Now need to place it somewhere.
+    auto &l1 = proc.L1Caches[to];
+    //if the block already exists, do nothing. (is this even possible?)
+    if(l1.check_cache(blockAddr)) { return; }
+    auto st = l1.set_from_addr(blockAddr);
+    auto &cacheData  = l1.cacheData;
+    auto &timeBlockAdded = l1.timeBlockAdded;
+    if(cacheData[st].size() < NUM_L1_WAYS) { // no need to evict, need to create new cache block
+        ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+        // update cache state correctly.
+        timeBlockAdded[st].insert({nwTime, blockAddr});
+        // we get put request only if in S state in directory.
+        cacheData[st][blockAddr] = {nwTime, State::S};
+    }
+    // evict and replace.
+    l1.evict(blockAddr); // update priority and all that.
+    int l2_bank = l1.get_llc_bank(blockAddr); // get LLc bank.
+    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr));
+    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+    assert(!l1.writeBackAckWait.contains(blockAddr));
+    l1.writeBackAckWait.insert(blockAddr);
+}
+
 // update priority for cache blocks
 void Get::handle(Processor &proc, bool toL1) {
     if(fromL1) { // this means message is sent to LLC bank
@@ -93,7 +121,7 @@ void Get::handle(Processor &proc, bool toL1) {
                     unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::GET, to, from, false, blockAddr));
                     proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
                 }
-                else if(dir_ent.dirty) {
+                else if(dir_ent.dirty) { // M state.
                     int owner = dir_ent.ownerId;
                     unique_ptr<Message> get(new Get(MsgType::GET, from, owner, true, blockAddr)); // L2 masks itself as the requestor
                     dir_ent.pending = true;
@@ -103,7 +131,7 @@ void Get::handle(Processor &proc, bool toL1) {
                     dir_ent.bitVector.set(owner);
                     proc.L1Caches[get->to].incomingMsg.push_back(move(get));
                 }
-                else {
+                else { // shared state
                     unique_ptr<Message> put(new Put(MsgType::PUT, to, from, false, blockAddr));
                     dir_ent.bitVector.set(from);
                     proc.L1Caches[put->to].incomingMsg.push_back(move(put));
@@ -215,7 +243,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                 }
             }
         }
-        else { // received at L1 cache 
+        else { // received at L1 cache
             auto &l1 = proc.L1Caches[to];
             if(l1.check_cache(blockAddr)) {  // if in cache
                 auto st = l1.set_from_addr(blockAddr);
@@ -228,8 +256,8 @@ void Getx::handle(Processor &proc, bool toL1) {
                 assert(!l1.writeBackAckWait.contains(blockAddr));
                 l1.writeBackAckWait.insert(blockAddr);
             }
-            else {  // currently dropping this Getx; this would happen when L1 evicted this block and is now receiving 
-                
+            else {  // currently dropping this Getx; this would happen when L1 evicted this block and is now receiving
+
             }
         }
     }

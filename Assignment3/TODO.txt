@@ -13,5 +13,6 @@ Check for every handle func if directory is properly maintained.
 Check for every handle func if cacheState is properly maintained.
 Check that we erase members from data structures also if we add them
 Don't reset directory entries that we are done with, since we would use them for writeback forwarding
-Need to have a data structure (L1) to check if we have already sent out a Get/Getx from L1 and need to invalidate them on receiving Put/Putx ; This structure couldalso be used to properly maintain the cache state on receiving Put/Putx. 
+Need to have a data structure (L1) to check if we have already sent out a Get/Getx from L1 and need to invalidate them on receiving Put/Putx ; This structure couldalso be used to properly maintain the cache state on receiving Put/Putx.
 Putx can be generated as a reply to Get if there are no sharers. Do appropriate changes for handlers for Put and Putx.
+Need to write replace function for L1 and L2 cache. Reuse!!

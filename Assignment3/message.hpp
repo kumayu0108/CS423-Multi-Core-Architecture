@@ -8,6 +8,8 @@ bool NACKStruct::operator<(const NACKStruct& other) {
 void Putx::handle(Processor &proc, bool toL1) {}
 void Nack::handle(Processor &proc, bool toL1) {}
 void Wb::handle(Processor &proc, bool toL1) {}
+void Upgr::handle(Processor &proc, bool toL1) {}
+void UpgrAck::handle(Processor &proc, bool toL1) {}
 
 void Inv::handle(Processor &proc, bool toL1) {
     auto &l1 = proc.L1Caches[to];

@@ -16,3 +16,7 @@ Don't reset directory entries that we are done with, since we would use them for
 Need to have a data structure (L1) to check if we have already sent out a Get/Getx from L1 and need to invalidate them on receiving Put/Putx ; This structure couldalso be used to properly maintain the cache state on receiving Put/Putx.
 Putx can be generated as a reply to Get if there are no sharers. Do appropriate changes for handlers for Put and Putx.
 Need to write replace function for L1 and L2 cache. Reuse!!
+
+Decided to update priority only at Put/Putx and UpgrAck, but what if we have 2 Getx, but since first one is delayed, we find we've already sent out a Getx, so we don't send Getx for the 2nd store, would this affect correctness? since we would only receive one Putx, inspite of accessing block twice.
+
+If the directory state of an L2 cache block is pending, you should avoid replacing the block. However, you may find yourself in a situation where all blocks in an L2 cache set are in pending state and you need to fill a new block into such a set. To handle this, you need to maintain the replaced block in a separate buffer until the transaction involving the block has finished

@@ -112,13 +112,14 @@ class Inv : public Message {
 class Wb : public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
+        bool inResponseToGet; // was this writeback in response to a Get
         void handle(Processor &proc, bool toL1);
         Wb(const Wb&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Wb& operator=(const Wb&) = delete; // delete copy assignment ctor too.
         Wb() : Message(), blockAddr(0) {}
-        Wb(Wb&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
-        Wb(MsgType msgType, int from, int to, bool fromL1, ull blockId) :
-            Message(msgType, from, to, fromL1), blockAddr(blockId) {}
+        Wb(Wb&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), inResponseToGet(move(other.inResponseToGet)) {}
+        Wb(MsgType msgType, int from, int to, bool fromL1, ull blockId, bool inResponseToGet) :
+            Message(msgType, from, to, fromL1), blockAddr(blockId), inResponseToGet(inResponseToGet) {}
 };
 
 class InvAck : public Message {
@@ -263,6 +264,7 @@ class L1 : public Cache {
     private:
         friend class Get;
         friend class Put;
+        friend class Inv;
         int inputTrace; // from where you would read line to line
         char buffer[MAX_BUF_L1 * sizeof(LogStruct) + 2];
         deque<LogStruct> logs;
@@ -315,6 +317,7 @@ class LLCBank : public Cache {
         friend class Put;
         friend class InvAck;
         friend class Inv;
+        friend class Wb;
         struct InvAckInclStruct {
             ull blockAddr; // this could depend on the context, in case of inv due to inclusivity, this could represent blockAddr to replace the replacedBlock with.
             int waitForNumMessages;
@@ -350,6 +353,7 @@ class Processor {
         friend class InvAck;
         friend class Get;
         friend class Getx;
+        friend class Wb;
         int numCycles; // number of Cycles
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;

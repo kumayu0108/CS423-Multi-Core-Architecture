@@ -7,7 +7,6 @@ bool NACKStruct::operator<(const NACKStruct& other) {
 
 void Putx::handle(Processor &proc, bool toL1) {}
 void Nack::handle(Processor &proc, bool toL1) {}
-void Wb::handle(Processor &proc, bool toL1) {}
 void Upgr::handle(Processor &proc, bool toL1) {}
 void UpgrAck::handle(Processor &proc, bool toL1) {}
 
@@ -22,9 +21,16 @@ void Inv::handle(Processor &proc, bool toL1) {
         proc.L1Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
     }
     else {
-        // generate inv ack to be sent to 'from' LLC
-        unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, blockAddr));
-        proc.L2Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
+        // generate inv ack to be sent to 'from' LLC; for inclusive purpose.
+        auto st = l1.set_from_addr(blockAddr);
+        if(l1.check_cache(blockAddr) and (l1.cacheData[st][blockAddr].state == State::M or l1.cacheData[st][blockAddr].state == State::E)) { // send writeback if cachestate in M or E
+            unique_ptr<Message> wb(new Wb(MsgType::WB, to, from, true, blockAddr, false));
+            proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+        }
+        else {
+            unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, blockAddr));
+            proc.L2Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
+        }
     }
 }
 
@@ -107,7 +113,7 @@ void Put::handle(Processor &proc, bool toL1) {
         // evict and replace. Correct This
         l1.evict(blockAddr); // update priority and all that.
         int l2_bank = l1.get_llc_bank(blockAddr); // get LLc bank.
-        unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr));
+        unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr, false));
         proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
         assert(!l1.writeBackAckWait.contains(blockAddr));
         l1.writeBackAckWait.insert(blockAddr);
@@ -174,13 +180,15 @@ void Get::handle(Processor &proc, bool toL1) {
         else {  // this is the case where L2 had earlier sent a Get to owner cacheBlock and it saw this Get as being received from requestor L1
             // Get can also be sent by L2 to L1 if L1 has block in M state.
             auto &l1 = proc.L1Caches[to];
+            auto st = l1.set_from_addr(blockAddr);
             if(l1.check_cache(blockAddr)) {  // if in cache
                 // AYUSH : do we need to check if the cache state of block is still M or not?; could it happen that the block has transitioned to S?
+                assert(l1.cacheData[st][blockAddr].state != State::S);
                 auto st = l1.set_from_addr(blockAddr);
                 l1.cacheData[st][blockAddr].state = State::S;
                 int l2_bank = l1.get_llc_bank(blockAddr);
                 unique_ptr<Message> put(new Put(MsgType::PUT, to, from, true, blockAddr));
-                unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr));
+                unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr, true));
                 proc.L1Caches[put->to].incomingMsg.push_back(move(put));
                 proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
                 // add entry to wait for wb ack
@@ -259,7 +267,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                 l1.evict(blockAddr);
                 int l2_bank = l1.get_llc_bank(blockAddr);
                 unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, true, blockAddr, 0));
-                unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr));
+                unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr, true));
                 proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                 proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
                 assert(!l1.writeBackAckWait.contains(blockAddr));
@@ -271,6 +279,58 @@ void Getx::handle(Processor &proc, bool toL1) {
         }
     }
     else { // this should not happen since whenever L2 sends a Getx to L1, it masks itself as the requestor L1, to let the receiver of Get know whom to send the message.
+        assert(false);
+    }
+}
+
+void Wb::handle(Processor &proc, bool toL1) {
+    if(fromL1) { 
+        if(!toL1) { // wb sent to L2
+            auto &l2 = proc.L2Caches[to];
+            auto st = l2.set_from_addr(blockAddr);
+            auto &dir_ent = l2.directory[st][blockAddr];
+            if(dir_ent.pending) {  // we expected a writeback.
+                dir_ent.pending = false;
+                if(!inResponseToGet) { // need to forward it.
+                    if(dir_ent.ownerId == from) { // directory going from M -> S, since owner did not change; forward a Put
+                        int l1_to_send_get = -1;
+                        for(int i = 0; i < dir_ent.bitVector.size(); i++) {
+                            if(dir_ent.bitVector.test(i) and i != from) {
+                                l1_to_send_get = i;
+                            }
+                        }
+                        assert(l1_to_send_get != -1);
+                        unique_ptr<Message> put(new Put(MsgType::PUT, from, l1_to_send_get, true, blockAddr));
+                        proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                    }
+                    else { // since owner changed, directory going from M -> M state, forward a Putx.
+                        unique_ptr<Message> putx(new Putx(MsgType::PUTX, from, dir_ent.ownerId, true, blockAddr, 0));
+                        proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                    }
+                }
+                else {  // this means that writeback was in response to a get and we do not need to forward it
+
+                }
+            }
+            else {  // we did not expect a writeback; this must mean that cache block has been evicted.
+                if(l2.numInvAcksToCollectForIncl.contains(blockAddr)) { // if evicted due to inclusivity purpose
+                    auto &inv_ack_struct = l2.numInvAcksToCollectForIncl[blockAddr];
+                    assert(inv_ack_struct.waitForNumMessages == 1 and inv_ack_struct.L1CacheNums.begin()->second);
+                    int l1_cache_num = (inv_ack_struct.L1CacheNums.begin()->first);
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_cache_num, false, inv_ack_struct.blockAddr, 0));
+                    proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                }
+                else { // this means that cache block was evicted and we did not send any inv request.  
+                    assert(dir_ent.dirty);
+                    dir_ent.bitVector.reset();
+                }
+            }
+        }
+        else { // cannot happen; wb cannot be sent to L1
+            assert(false);
+        }
+    }
+    else { // cannot happen; wb cannot come from L2
         assert(false);
     }
 }

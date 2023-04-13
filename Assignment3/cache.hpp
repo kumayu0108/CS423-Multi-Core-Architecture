@@ -126,12 +126,12 @@ bool L1::process(Processor &proc) {
                 break;
             }
             case MsgType::INV_ACK:{
-                CALL_HANDLER(Inv, true);
+                CALL_HANDLER(InvAck, true);
                 break;
             }
 
             case MsgType::GET:{
-                CALL_HANDLER(Inv, true);
+                CALL_HANDLER(Get, true);
                 break;
             }
 
@@ -185,12 +185,12 @@ bool LLCBank::process(Processor &proc) {
             break;
         }
         case MsgType::INV_ACK:{
-            CALL_HANDLER(Inv, false);
+            CALL_HANDLER(InvAck, false);
             break;
         }
 
         case MsgType::GET:{
-            CALL_HANDLER(Inv, false);
+            CALL_HANDLER(Get, false);
             break;
         }
 

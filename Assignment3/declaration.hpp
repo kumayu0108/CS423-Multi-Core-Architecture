@@ -35,7 +35,7 @@ constexpr int L2_BANK_BITS = 0x7;
 constexpr int NUM_CACHE = 8;
 int trace[MAX_PROC];
 
-enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX};
+enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX, UPGR, UPGR_ACK };
 enum State {M, E, S, I};
 
 // The data is logged in binary in the format of the following struct
@@ -195,6 +195,31 @@ class Nack: public Message {
         Message(msgType, from, to, fromL1), blockAddr(blockId), nackedMsg(nackedMsg) {}
 };
 
+class Upgr: public Message {
+    public:
+        ull blockAddr; // which cache block ADDR
+        void handle(Processor &proc, bool toL1);
+        Upgr(const Upgr&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        Upgr& operator=(const Upgr&) = delete; // delete copy assignment ctor too.
+        Upgr() : Message() {}
+        Upgr(Upgr&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
+        Upgr(MsgType msgType, int from, int to, bool fromL1, ull blockAddr) :
+        Message(msgType, from, to, fromL1), blockAddr(blockAddr) {}
+};
+
+class UpgrAck: public Message {
+    public:
+        ull blockAddr; // which cache block ADDR to be evicted?
+        int numInvToCollect;
+        void handle(Processor &proc, bool toL1);
+        UpgrAck(const UpgrAck&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        UpgrAck& operator=(const UpgrAck&) = delete; // delete copy assignment ctor too.
+        UpgrAck() : Message() {}
+        UpgrAck(UpgrAck&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numInvToCollect(move(other.numInvToCollect)) {}
+        UpgrAck(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numInvToCollect) :
+        Message(msgType, from, to, fromL1), blockAddr(blockId), numInvToCollect(numInvToCollect) {}
+};
+
 class Cache {
     protected:
         // probably need these as public
@@ -318,6 +343,7 @@ class LLCBank : public Cache {
 
 class Processor {
     private:
+        friend class L1;
         friend class LLCBank;
         friend class Inv;
         friend class Put;

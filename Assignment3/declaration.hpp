@@ -328,6 +328,7 @@ class LLCBank : public Cache {
         friend class InvAck;
         friend class Inv;
         friend class Wb;
+        friend class Upgr;
         struct InvAckInclStruct {
             ull blockAddr; // this could depend on the context, in case of inv due to inclusivity, this could represent blockAddr to replace the replacedBlock with.
             int waitForNumMessages;
@@ -364,6 +365,7 @@ class Processor {
         friend class Get;
         friend class Getx;
         friend class Wb;
+        friend class Upgr;
         int numCycles; // number of Cycles
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;

@@ -7,7 +7,6 @@ bool NACKStruct::operator<(const NACKStruct& other) {
 
 void Putx::handle(Processor &proc, bool toL1) {}
 void Nack::handle(Processor &proc, bool toL1) {}
-void Upgr::handle(Processor &proc, bool toL1) {}
 void UpgrAck::handle(Processor &proc, bool toL1) {}
 
 void Inv::handle(Processor &proc, bool toL1) {
@@ -255,6 +254,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                     dir_ent.pending = true;
                     dir_ent.dirty = true;
                     unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, dir_ent.bitVector.count()));
+                    proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                     for(int i = 0; i < dir_ent.bitVector.size(); i++) {
                         if(!dir_ent.bitVector.test(i)) { continue; }
                         unique_ptr<Message> inv(new Inv(MsgType::INV, from, i, true, blockAddr)); // L2 masks itself as the receiver of Getx so that all inv acks are sent to it.
@@ -364,3 +364,38 @@ void Wb::handle(Processor &proc, bool toL1) {
         assert(false);
     }
 }
+
+void Upgr::handle(Processor &proc, bool toL1) {
+    if(fromL1) {
+        if(!toL1) { // to L2
+            auto &l2 = proc.L2Caches[to];
+            auto st = l2.set_from_addr(blockAddr);
+            assert(l2.directory[st].contains(blockAddr)); // since we receive a upgr message, directory should have this entry
+            auto &dir_ent = l2.directory[st][blockAddr];
+            if(dir_ent.pending) {
+                unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::UPGR, to, from, false, blockAddr));
+                proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
+            }
+            else if(dir_ent.dirty) { // this means that some other block requested a GetX, and before it's invalidation reached L1, L1 generated Upgr, need to NACK this.
+                unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::UPGR, to, from, false, blockAddr));
+                proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
+            }
+            else {
+                unique_ptr<Message> upgr_ack(new UpgrAck(MsgType::UPGR_ACK, to, from, false, blockAddr, dir_ent.bitVector.count()));
+                proc.L1Caches[upgr_ack->to].incomingMsg.push_back(move(upgr_ack));
+                for(int i = 0; i < dir_ent.bitVector.size(); i++) {
+                    if(!dir_ent.bitVector.test(i)) {continue;}
+                    unique_ptr<Message> inv(new Inv(MsgType::INV, from, i, true, blockAddr)); // masking to let this l1 know it needs to send inv to 'from' l1.
+                    proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
+                }
+            }
+        }
+        else {  // should not happen as L2 won't forward an Upgr request
+            assert(false);
+        }
+    }
+    else { // should not happen
+        assert(false);
+    }
+}
+

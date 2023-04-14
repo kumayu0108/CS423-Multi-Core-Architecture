@@ -236,7 +236,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                     dir_ent.ownerId = from;
                     dir_ent.pending = true;
                     dir_ent.dirty = true;
-                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, dir_ent.bitVector.count()));
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, dir_ent.bitVector.count(), State::M));
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                     for(int i = 0; i < dir_ent.bitVector.size(); i++) {
                         if(!dir_ent.bitVector.test(i)) { continue; }
@@ -246,8 +246,10 @@ void Getx::handle(Processor &proc, bool toL1) {
                 }
             }
             else if(l2.check_cache(blockAddr)) { // if present in cache but not in dir
+                //PRAMODH:: Should this even happen?? If inserting correctly, shouldnt occur
                 auto &dir_ent = l2.directory[st][blockAddr];
-                unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0));
+                // if not present in Dir, first time block goes in E state
+                unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));
                 dir_ent.dirty = true;
                 dir_ent.ownerId = from;
                 dir_ent.pending = false;
@@ -257,7 +259,7 @@ void Getx::handle(Processor &proc, bool toL1) {
             else {
                 auto &dir_ent = l2.directory[st][blockAddr];
                 if(l2.cacheData[st].size() < NUM_L2_WAYS) { // no need to send invalidations
-                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0));
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));
                     dir_ent.dirty = true;
                     dir_ent.ownerId = from;
                     dir_ent.pending = false;
@@ -275,7 +277,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                 auto st = l1.set_from_addr(blockAddr);
                 l1.evict(blockAddr);
                 int l2_bank = l1.get_llc_bank(blockAddr);
-                unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, true, blockAddr, 0));
+                unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, true, blockAddr, 0, State::M));
                 unique_ptr<Message> wb(new Wb(MsgType::WB, to, l2_bank, true, blockAddr, true));
                 proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                 proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
@@ -317,7 +319,7 @@ void Wb::handle(Processor &proc, bool toL1) {
                         proc.L1Caches[put->to].incomingMsg.push_back(move(put));
                     }
                     else { // since owner changed, directory going from M -> M state, forward a Putx.
-                        unique_ptr<Message> putx(new Putx(MsgType::PUTX, from, dir_ent.ownerId, true, blockAddr, 0));
+                        unique_ptr<Message> putx(new Putx(MsgType::PUTX, from, dir_ent.ownerId, true, blockAddr, 0, State::M));
                         proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                     }
                 }
@@ -330,7 +332,7 @@ void Wb::handle(Processor &proc, bool toL1) {
                     auto &inv_ack_struct = l2.numInvAcksToCollectForIncl[blockAddr];
                     assert(inv_ack_struct.waitForNumMessages == 1 and inv_ack_struct.L1CacheNums.begin()->second);
                     int l1_cache_num = (inv_ack_struct.L1CacheNums.begin()->first);
-                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_cache_num, false, inv_ack_struct.blockAddr, 0));
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_cache_num, false, inv_ack_struct.blockAddr, 0, State::M));
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                 }
                 else { // this means that cache block was evicted and we did not send any inv request.

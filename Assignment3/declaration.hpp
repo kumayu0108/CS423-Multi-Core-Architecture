@@ -173,7 +173,7 @@ class Put: public Message {
     public:
         ull blockAddr; // which cache block ADDR
         void handle(Processor &proc, bool toL1);
-        Put(const Put&) = delete; // delete copy ctor explicitly, since it's a move only cls.
+        Put(const Put&) = delete; // delete copy ctor explicitly,since it's a move only cls.
         Put& operator=(const Put&) = delete; // delete copy assignment ctor too.
         Put() : Message() {}
         Put(Put&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
@@ -185,13 +185,15 @@ class Putx: public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
         int numInvToCollect;
+        State state;
         void handle(Processor &proc, bool toL1);
         Putx(const Putx&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Putx& operator=(const Putx&) = delete; // delete copy assignment ctor too.
         Putx() : Message() {}
-        Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numInvToCollect(move(other.numInvToCollect)) {}
-        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numInvToCollect) :
-        Message(msgType, from, to, fromL1), blockAddr(blockId), numInvToCollect(numInvToCollect) {}
+        Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numInvToCollect(move(other.numInvToCollect)),
+            state(move(other.state)) {}
+        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numInvToCollect, State state = State::M) :
+        Message(msgType, from, to, fromL1), blockAddr(blockId), numInvToCollect(numInvToCollect), state(state) {}
 };
 
 class Nack: public Message {

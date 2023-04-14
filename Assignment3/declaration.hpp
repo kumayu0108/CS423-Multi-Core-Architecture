@@ -19,7 +19,6 @@ using std::unique_ptr, std::make_unique, std::move;
 
 #define ull unsigned long long
 #define timeAddr std::pair<unsigned long, ull>
-#define blk std::pair<ull, bool>
 
 constexpr int NUM_L1_SETS = (1 << 6);   // each L1 cache
 constexpr int NUM_L2_SETS_PER_BANK = (1 << 9);  // in each bank!
@@ -72,6 +71,18 @@ struct DirEnt {
         pending(move(other.pending)) {}
 };
 
+struct cacheBlock {
+    ull time;
+    State state;
+    cacheBlock() : time(0), state(State::I) {}
+    cacheBlock(ull time, State state) : time(time), state(state) {};
+    cacheBlock& operator=(const cacheBlock& other) {//time(other.time), state(other.state) { return *this;}
+        time = other.time;
+        state = other.state;
+        return *this;
+    }
+    cacheBlock(cacheBlock && other) noexcept : time(move(other.time)), state(move(other.state)) {}
+};
 
 class Processor;    //forward declaration
 
@@ -224,18 +235,6 @@ class UpgrAck: public Message {
 class Cache {
     protected:
         // probably need these as public
-        struct cacheBlock {
-            ull time;
-            State state;
-            cacheBlock() : time(0), state(State::I) {}
-            cacheBlock(ull time, State state) : time(time), state(state) {};
-            cacheBlock& operator=(const cacheBlock& other) {//time(other.time), state(other.state) { return *this;}
-                time = other.time;
-                state = other.state;
-                return *this;
-            }
-            cacheBlock(cacheBlock && other) noexcept : time(move(other.time)), state(move(other.state)) {}
-        };
         vector<unordered_map<ull, cacheBlock>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
         map<NACKStruct, int> outstandingNacks;
@@ -243,6 +242,7 @@ class Cache {
         int id; // id of cache
     public:
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
+        virtual cacheBlock evict_replace(ull addr) = 0;
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         // this function only removes this addr from cache & returns if anything got evicted
@@ -266,12 +266,12 @@ class L1 : public Cache {
         friend class Put;
         friend class Inv;
         friend class InvAck;
-        struct InvAckStruct { 
+        struct InvAckStruct {
             ull numInvToCollect;
             bool getReceived, getXReceived; // did we receive any Get/GetX while we were waiting for inv acks?
             int to; // if we received Get/GetX, where do I need to send Put.
             InvAckStruct() : numInvToCollect(0), getReceived(false), getXReceived(false), to(0) {}
-            InvAckStruct(InvAckStruct && other) noexcept : 
+            InvAckStruct(InvAckStruct && other) noexcept :
                 numInvToCollect(move(other.numInvToCollect)), getReceived(move(other.getReceived)), getXReceived(move(other.getXReceived)), to(move(other.to)) {}
         };
         int inputTrace; // from where you would read line to line
@@ -296,8 +296,8 @@ class L1 : public Cache {
         unordered_map<ull, InvAckStruct> numInvToCollect; // block -> num; used when we want to collect inv acks for Getx request.
         unordered_set<ull> writeBackAckWait; // wait for wb ack;
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
-        blk evict_replace(ull addr);
         bool check_cache(ull addr);
+        cacheBlock evict_replace(ull addr);
         int get_llc_bank(ull addr);
         bool process(Processor &proc);
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
@@ -345,6 +345,7 @@ class LLCBank : public Cache {
         unordered_map <ull, InvAckInclStruct> numInvAcksToCollectForIncl; // this would be a map from what messages are outstanding to a map from a struct to how many messages to wait (in case of INV) (required here since L2 needs to wait for Inv Ack for inclusivity)
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
+        cacheBlock evict_replace(ull addr);
         bool process(Processor &proc);
         void bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum, bool Getx = false);
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK), directory(NUM_L2_SETS_PER_BANK) {}

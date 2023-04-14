@@ -9,6 +9,7 @@ Maintain separate cache state, per block inside L1. -> modify cacheData to conta
 Replace and Evict, make them virtual and implement them with messages for L1 and L2. Add appropriate asserts.
 split files. (done)
 
+Remove blk (done)
 Check for every handle func if directory is properly maintained.
 Check for every handle func if cacheState is properly maintained.
 Check that we erase members from data structures also if we add them

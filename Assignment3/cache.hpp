@@ -40,8 +40,8 @@ void Cache::update_priority(ull addr) { // this function updates the priority of
     cacheData[st][addr].time = nwTime;
 }
 
-// This function should not assign any cache state to the block, since the state could either be M, S or E. 
-blk L1::evict_replace(ull addr) {
+// This function should not assign any cache state to the block, since the state could either be M, S or E.
+cacheBlock L1::evict_replace(ull addr) {
 
 }
 
@@ -92,7 +92,7 @@ bool L1::process(Processor &proc) {
                     // AYUSH : what to do? send Getx?
                 }
                 else { // even if we have already sent a Get request, we need to send a Getx.
-                    // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and 
+                    // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and
                     auto l2_bank_num = get_llc_bank(log.addr);
                     getXReplyWait.insert(log.addr);
                     unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
@@ -224,6 +224,10 @@ bool LLCBank::process(Processor &proc) {
         }
     }
     return false;
+}
+
+cacheBlock LLCBank::evict_replace(ull addr) {
+
 }
 
 void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum, bool Getx) {

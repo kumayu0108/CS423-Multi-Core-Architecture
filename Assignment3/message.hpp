@@ -41,13 +41,35 @@ void InvAck::handle(Processor &proc, bool toL1) {
             // since we collect an invalidation this means that this entry should contain this block address; HOWEVER, can inv acks arrive before invs?
             // assert(l1.numInvToCollect.contains(blockAddr));
             if (l1.numInvToCollect.contains(blockAddr)) {
-                l1.numInvToCollect[blockAddr]--;
+                l1.numInvToCollect[blockAddr].numInvToCollect--;
             }
             else {
-                l1.numInvToCollect[blockAddr]++;
+                l1.numInvToCollect[blockAddr].numInvToCollect++;
             }
             // this could happen in PUTX
-            if(l1.numInvToCollect[blockAddr] == 0) {
+            if(l1.numInvToCollect[blockAddr].numInvToCollect == 0) { // update priority and put in cache.
+                l1.evict_replace(blockAddr);
+                auto &inv_ack_struct = l1.numInvToCollect[blockAddr];
+                auto st = l1.set_from_addr(blockAddr);
+                if(inv_ack_struct.getReceived) {
+                    assert(!inv_ack_struct.getXReceived); // cannot have received both get and getx as directory would go in pending state.
+                    unique_ptr<Message> put(new Put(MsgType::PUT, to, inv_ack_struct.to, true, blockAddr));
+                    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l1.get_llc_bank(blockAddr), true, blockAddr, true));
+                    l1.cacheData[st][blockAddr].state = State::S; // since it received Get earlier, so it transitions to S, after generating a writeback.
+                    proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                }
+                else if(inv_ack_struct.getXReceived) {
+                    assert(!inv_ack_struct.getReceived); // cannot have received both get and getx as directory would go in pending state.
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, inv_ack_struct.to, true, blockAddr, 0));
+                    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l1.get_llc_bank(blockAddr), true, blockAddr, true));
+                    l1.evict(blockAddr); // since it received Getx, it has to also invalidate the block
+                    proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                }
+                else {
+                    l1.cacheData[st][blockAddr].state = State::M; // since it collected invalidations from everyone, it can transition to M.
+                }
                 l1.numInvToCollect.erase(blockAddr);
             }
         }
@@ -194,6 +216,9 @@ void Get::handle(Processor &proc, bool toL1) {
                 // add entry to wait for wb ack
                 assert(!l1.writeBackAckWait.contains(blockAddr));
                 l1.writeBackAckWait.insert(blockAddr);
+            }
+            else if(l1.numInvToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.s
+
             }
             else {  // AYUSH : if we received get, but block has already been evicted , what to do??? I think we should drop this Get ; currently dropping
                 // assert(false);

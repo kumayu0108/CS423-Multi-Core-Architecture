@@ -265,6 +265,15 @@ class L1 : public Cache {
         friend class Get;
         friend class Put;
         friend class Inv;
+        friend class InvAck;
+        struct InvAckStruct { 
+            ull numInvToCollect;
+            bool getReceived, getXReceived; // did we receive any Get/GetX while we were waiting for inv acks?
+            int to; // if we received Get/GetX, where do I need to send Put.
+            InvAckStruct() : numInvToCollect(0), getReceived(false), getXReceived(false), to(0) {}
+            InvAckStruct(InvAckStruct && other) noexcept : 
+                numInvToCollect(move(other.numInvToCollect)), getReceived(move(other.getReceived)), getXReceived(move(other.getXReceived)), to(move(other.to)) {}
+        };
         int inputTrace; // from where you would read line to line
         char buffer[MAX_BUF_L1 * sizeof(LogStruct) + 2];
         deque<LogStruct> logs;
@@ -284,9 +293,10 @@ class L1 : public Cache {
         unordered_set<ull> getReplyWait;
         unordered_set<ull> getXReplyWait;
         unordered_set<ull> upgrReplyWait;
-        unordered_map<ull, ull> numInvToCollect; // block -> num; used when we want to collect inv acks for Getx request.
+        unordered_map<ull, InvAckStruct> numInvToCollect; // block -> num; used when we want to collect inv acks for Getx request.
         unordered_set<ull> writeBackAckWait; // wait for wb ack;
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
+        blk evict_replace(ull addr);
         bool check_cache(ull addr);
         int get_llc_bank(ull addr);
         bool process(Processor &proc);

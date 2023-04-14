@@ -40,6 +40,11 @@ void Cache::update_priority(ull addr) { // this function updates the priority of
     cacheData[st][addr].time = nwTime;
 }
 
+// This function should not assign any cache state to the block, since the state could either be M, S or E. 
+blk L1::evict_replace(ull addr) {
+
+}
+
 // this wrapper would convert message to required type by taking ownership and then returns ownership
 #define CALL_HANDLER(MSG_TYPE, TO_L1) \
     unique_ptr<MSG_TYPE> inv_msg(static_cast<MSG_TYPE *>(msg.release())); \
@@ -234,7 +239,7 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
                 proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
             }
             else {
-              it.second.L1CacheNums.insert({L1CacheNum, Getx});
+                it.second.L1CacheNums.insert({L1CacheNum, Getx});
             }
             return;
         }

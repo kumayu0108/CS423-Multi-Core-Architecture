@@ -217,8 +217,9 @@ void Get::handle(Processor &proc, bool toL1) {
                 assert(!l1.writeBackAckWait.contains(blockAddr));
                 l1.writeBackAckWait.insert(blockAddr);
             }
-            else if(l1.numInvToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.s
-
+            else if(l1.numInvToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.
+                l1.numInvToCollect[blockAddr].getReceived = true;
+                l1.numInvToCollect[blockAddr].to = from;
             }
             else {  // AYUSH : if we received get, but block has already been evicted , what to do??? I think we should drop this Get ; currently dropping
                 // assert(false);
@@ -297,6 +298,10 @@ void Getx::handle(Processor &proc, bool toL1) {
                 proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
                 assert(!l1.writeBackAckWait.contains(blockAddr));
                 l1.writeBackAckWait.insert(blockAddr);
+            }
+            else if(l1.numInvToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.
+                l1.numInvToCollect[blockAddr].getXReceived = true;
+                l1.numInvToCollect[blockAddr].to = from;
             }
             else {  // currently dropping this Getx; this would happen when L1 evicted this block and is now receiving
 

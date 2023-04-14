@@ -242,11 +242,11 @@ class Cache {
         int id; // id of cache
     public:
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
-        virtual cacheBlock evict_replace(ull addr) = 0;
+        virtual cacheBlock evict_replace(Processor& proc, ull addr, State state) = 0;
         virtual bool check_cache(ull addr) = 0;
         virtual ull set_from_addr(ull addr) = 0;
         // this function only removes this addr from cache & returns if anything got evicted
-        bool evict(ull addr);
+        virtual bool evict(ull addr) = 0;
         void update_priority(ull addr);
         // need proc since we need to pass it to message.handle() that would be called inside
         virtual bool process(Processor &proc) = 0;
@@ -297,7 +297,8 @@ class L1 : public Cache {
         unordered_set<ull> writeBackAckWait; // wait for wb ack;
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr);
-        cacheBlock evict_replace(ull addr);
+        bool evict(ull addr);
+        cacheBlock evict_replace(Processor& proc, ull addr, State state);
         int get_llc_bank(ull addr);
         bool process(Processor &proc);
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
@@ -345,7 +346,8 @@ class LLCBank : public Cache {
         unordered_map <ull, InvAckInclStruct> numInvAcksToCollectForIncl; // this would be a map from what messages are outstanding to a map from a struct to how many messages to wait (in case of INV) (required here since L2 needs to wait for Inv Ack for inclusivity)
         inline ull set_from_addr(ull addr) { return ((addr << (LOG_BLOCK_SIZE + LOG_L2_BANKS)) & L2_SET_BITS); }
         bool check_cache(ull addr){ return cacheData[set_from_addr(addr)].contains(addr); }
-        cacheBlock evict_replace(ull addr);
+        cacheBlock evict_replace(Processor& proc, ull addr, State state);
+        bool evict(ull addr);
         bool process(Processor &proc);
         void bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum, bool Getx = false);
         LLCBank(int id): Cache(id, NUM_L2_SETS_PER_BANK), directory(NUM_L2_SETS_PER_BANK) {}

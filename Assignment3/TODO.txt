@@ -16,7 +16,7 @@ Check that we erase members from data structures also if we add them
 Don't reset directory entries that we are done with, since we would use them for writeback forwarding
 Need to have a data structure (L1) to check if we have already sent out a Get/Getx from L1 and need to invalidate them on receiving Put/Putx ; This structure couldalso be used to properly maintain the cache state on receiving Put/Putx.
 Putx can be generated as a reply to Get if there are no sharers. Do appropriate changes for handlers for Put and Putx.
-Need to write replace function for L1 and L2 cache. Reuse!!
+Need to write replace function for L1 and L2 cache. Reuse!! (done)
 
 Decided to update priority only at Put/Putx and UpgrAck, but what if we have 2 Getx, but since first one is delayed, we find we've already sent out a Getx, so we don't send Getx for the 2nd store, would this affect correctness? since we would only receive one Putx, inspite of accessing block twice.
 

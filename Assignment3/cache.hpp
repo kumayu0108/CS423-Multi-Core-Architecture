@@ -5,7 +5,8 @@
 class Processor;
 
 // this function only removes this addr from cache & returns if anything got evicted
-bool Cache::evict(ull addr) {
+bool L1::evict(ull addr) {
+    assert(check_cache(addr));
     ull st = set_from_addr(addr);
     assert(st < cacheData.size());
     if(!cacheData[st].contains(addr)) { return false; }
@@ -41,8 +42,35 @@ void Cache::update_priority(ull addr) { // this function updates the priority of
 }
 
 // This function should not assign any cache state to the block, since the state could either be M, S or E.
-cacheBlock L1::evict_replace(ull addr) {
+cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
 
+    auto st = set_from_addr(addr);
+    auto &l1 = proc.L1Caches[id];
+    auto &cacheData = l1.cacheData;
+    auto &timeBlockAdded = l1.timeBlockAdded;
+    auto [leastTime, evictAddr] = *timeBlockAdded[st].begin(); // find LRU time cache block
+
+    if(cacheData[st].size() < NUM_L1_WAYS) { // no need to evict, need to create new cache block
+        ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+        // update cache state correctly.
+        timeBlockAdded[st].insert({nwTime, addr});
+        // we get put request only if in S state in directory.
+        cacheData[st][addr] = {nwTime, state};
+        return {evictAddr, State::I};
+   }
+
+    evict(evictAddr); // update priority and all that.
+    ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+    timeBlockAdded[st].insert({nwTime, addr});
+    cacheData[st][addr] = {nwTime, state};
+
+    int l2_bank = get_llc_bank(evictAddr); // get LLc bank.
+    unique_ptr<Message> wb(new Wb(MsgType::WB, id, l2_bank, true, evictAddr, false));
+    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+    assert(!l1.writeBackAckWait.contains(evictAddr));
+    l1.writeBackAckWait.insert(evictAddr);
+
+    return {evictAddr, State::I}; // dont believe state. just returning time for now.
 }
 
 // this wrapper would convert message to required type by taking ownership and then returns ownership
@@ -226,8 +254,20 @@ bool LLCBank::process(Processor &proc) {
     return false;
 }
 
-cacheBlock LLCBank::evict_replace(ull addr) {
+// not reqd as of now, + insane design overhead.
+cacheBlock LLCBank::evict_replace(Processor& proc, ull addr, State state) { return {0, State::I}; }
 
+bool LLCBank::evict(ull addr) {
+    assert(check_cache(addr));
+    ull st = set_from_addr(addr);
+    assert(st < cacheData.size());
+    if(!cacheData[st].contains(addr)) { return false; }
+    int time = cacheData[st][addr].time;
+    assert(timeBlockAdded[st].contains({time, addr}));
+    cacheData[st].erase(addr);
+    timeBlockAdded[st].erase({time, addr});
+    directory[st].erase(addr);
+    return true;
 }
 
 void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1CacheNum, bool Getx) {

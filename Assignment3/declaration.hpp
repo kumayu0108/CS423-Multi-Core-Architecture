@@ -266,6 +266,7 @@ class L1 : public Cache {
     private:
         friend class Get;
         friend class Put;
+        friend class Putx;
         friend class Inv;
         friend class InvAck;
         struct InvAckStruct {

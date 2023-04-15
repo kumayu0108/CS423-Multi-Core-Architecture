@@ -46,6 +46,7 @@ void InvAck::handle(Processor &proc, bool toL1) {
                 l1.numAckToCollect[blockAddr].numAckToCollect--;
             }
             // this could happen in PUTX
+            //NOTE:: The same code also exists in Putx. If you change this here, change it there too
             if(l1.numAckToCollect[blockAddr].numAckToCollect == 0) { // update priority and put in cache.
                 l1.evict_replace(proc, blockAddr, State::M);
                 auto &inv_ack_struct = l1.numAckToCollect[blockAddr];
@@ -227,12 +228,27 @@ void Putx::handle(Processor &proc, bool toL1) {
                 l1.numAckToCollect[blockAddr].numAckToCollect += numAckToCollect;
             }
             auto &inv_ack_struct = l1.numAckToCollect[blockAddr];
+            auto st = l1.set_from_addr(blockAddr);
             if(inv_ack_struct.numAckToCollect == 0) {
                 // can go ahead and allocate block
                 l1.evict_replace(proc, blockAddr, state);
-                // need to copy stuff from invAck handler, asserted false for now.
-                if(inv_ack_struct.getReceived) { assert(false); }
-                else if(inv_ack_struct.getXReceived) { assert(false); }
+                //NOTE:: The same code also exists in InvAck. If you change this here, change it there too
+                if(inv_ack_struct.getReceived) {
+                    assert(!inv_ack_struct.getXReceived); // cannot have received both get and getx as directory would go in pending state.
+                    unique_ptr<Message> put(new Put(MsgType::PUT, to, inv_ack_struct.to, true, blockAddr));
+                    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l1.get_llc_bank(blockAddr), true, blockAddr, true));
+                    l1.cacheData[st][blockAddr].state = State::S; // since it received Get earlier, so it transitions to S, after generating a writeback.
+                    proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                }
+                else if(inv_ack_struct.getXReceived) {
+                    assert(!inv_ack_struct.getReceived); // cannot have received both get and getx as directory would go in pending state.
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, inv_ack_struct.to, true, blockAddr, 0));
+                    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l1.get_llc_bank(blockAddr), true, blockAddr, true));
+                    l1.evict(blockAddr); // since it received Getx, it has to also invalidate the block
+                    proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                }
                 l1.numAckToCollect.erase(blockAddr);
             }
         }

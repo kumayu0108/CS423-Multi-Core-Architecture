@@ -42,7 +42,8 @@ void InvAck::handle(Processor &proc, bool toL1) {
                 l1.numAckToCollect[blockAddr].numAckToCollect--;
             }
             else {
-                l1.numAckToCollect[blockAddr].numAckToCollect++;
+                l1.numAckToCollect[blockAddr].numAckToCollect = 0;
+                l1.numAckToCollect[blockAddr].numAckToCollect--;
             }
             // this could happen in PUTX
             if(l1.numAckToCollect[blockAddr].numAckToCollect == 0) { // update priority and put in cache.
@@ -64,9 +65,6 @@ void InvAck::handle(Processor &proc, bool toL1) {
                     l1.evict(blockAddr); // since it received Getx, it has to also invalidate the block
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                     proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
-                }
-                else {
-                    l1.cacheData[st][blockAddr].state = State::M; // since it collected invalidations from everyone, it can transition to M.
                 }
                 l1.numAckToCollect.erase(blockAddr);
             }
@@ -221,7 +219,22 @@ void Putx::handle(Processor &proc, bool toL1) {
             l1.evict_replace(proc, blockAddr, state);
         }
         else {
-
+            if(l1.numAckToCollect.contains(blockAddr)) {
+                l1.numAckToCollect[blockAddr].numAckToCollect += numAckToCollect;
+            }
+            else {
+                l1.numAckToCollect[blockAddr].numAckToCollect = 0;
+                l1.numAckToCollect[blockAddr].numAckToCollect += numAckToCollect;
+            }
+            auto &inv_ack_struct = l1.numAckToCollect[blockAddr];
+            if(inv_ack_struct.numAckToCollect == 0) {
+                // can go ahead and allocate block
+                l1.evict_replace(proc, blockAddr, state);
+                // need to copy stuff from invAck handler, asserted false for now.
+                if(inv_ack_struct.getReceived) { assert(false); }
+                else if(inv_ack_struct.getXReceived) { assert(false); }
+                l1.numAckToCollect.erase(blockAddr);
+            }
         }
     }
     else { // putx request cant be sent to L2.

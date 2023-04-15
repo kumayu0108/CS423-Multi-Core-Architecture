@@ -17,10 +17,19 @@ Don't reset directory entries that we are done with, since we would use them for
 Need to have a data structure (L1) to check if we have already sent out a Get/Getx from L1 and need to invalidate them on receiving Put/Putx ; This structure couldalso be used to properly maintain the cache state on receiving Put/Putx.
 Putx can be generated as a reply to Get if there are no sharers. Do appropriate changes for handlers for Put and Putx.
 Need to write replace function for L1 and L2 cache. Reuse!! (done)
-Check whether putx message is generated correctly, state in which block is supposed to initted.
+Check whether putx message is generated correctly, state in which block is supposed to initted. (done)
 
 Decided to update priority only at Put/Putx and UpgrAck, but what if we have 2 Getx, but since first one is delayed, we find we've already sent out a Getx, so we don't send Getx for the 2nd store, would this affect correctness? since we would only receive one Putx, inspite of accessing block twice.
 
 What if we sent Upgr and before receiving upgr ack, evict the block, then home sends upgr ack and when we receive it we do not have the block what to do???, and then some processor does Getx, it reaches home, (home changes owner and sets pending bit), and gets forwarded to first processor. ---> If we sent a Getx on not having block even after having received upgr ack, if GetX of first processor reaches last, it would find pending bit set and return.  ----> I think a better solution could be to not evict block if we send an upgr request, but then what happens if we get an inv for this block (some other processor also sent getx/upgr), we need to store now that we need to send inv ack after we receive nack for upgr.
 
 If the directory state of an L2 cache block is pending, you should avoid replacing the block. However, you may find yourself in a situation where all blocks in an L2 cache set are in pending state and you need to fill a new block into such a set. To handle this, you need to maintain the replaced block in a separate buffer until the transaction involving the block has finished
+
+skip blocks in upgrReply wait in evict_replace.
+
+
+
+___________________________
+remove toL1 from handlers
+
+move blockAddr to Message

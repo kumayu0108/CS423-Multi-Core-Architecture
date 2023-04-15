@@ -5,7 +5,6 @@ bool NACKStruct::operator<(const NACKStruct& other) {
     return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr);
 }
 
-void Nack::handle(Processor &proc, bool toL1) {}
 void UpgrAck::handle(Processor &proc, bool toL1) {}
 
 void Inv::handle(Processor &proc, bool toL1) {
@@ -429,3 +428,37 @@ void Upgr::handle(Processor &proc, bool toL1) {
     }
 }
 
+void Nack::handle(Processor &proc, bool toL1) {
+    if(fromL1) { // L1 won't send a NACK
+        assert(false);
+    }
+    else {
+        if(toL1) {
+            switch (msgType)
+            {
+                case MsgType::GET: {
+
+                    break;
+                }
+
+                case MsgType::GETX: {
+                    
+                    break;
+                }
+
+                case MsgType::UPGR: {
+                    
+                    break;
+                }
+
+                default: {
+                    assert(false);  // only these Nacks would occur
+                    break;
+                }
+            }
+        }
+        else { // L2 won't send a NACK to L2
+            assert(false);
+        }
+    }
+}

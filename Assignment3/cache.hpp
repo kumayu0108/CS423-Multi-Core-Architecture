@@ -79,74 +79,123 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
     inv_msg->handle(proc, TO_L1); \
     msg.reset(static_cast<Message *>(inv_msg.release()))
 
-bool L1::process(Processor &proc) {
-    bool progress = false;
-    read_if_reqd();
-    if(!logs.empty() and proc.nextGlobalMsgToProcess >= logs.front().time) { // process from trace
-        if(proc.nextGlobalMsgToProcess == logs.front().time) {proc.nextGlobalMsgToProcess++;}
-        progress = true;
-        auto log = logs.front();
-        logs.pop_front();
-        if(check_cache(log.addr)) { // also update priority except for the case of upgr.
-            if(log.isStore) { // write
-                auto &cache_block = cacheData[set_from_addr(log.addr)][log.addr];
-                if(cache_block.state == State::M) {
-                    // can simply do the store.
-                    assert(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
-                    update_priority(log.addr);
-                }
-                else if(cache_block.state == State::E) {
-                    assert(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
-                    cache_block.state = State::M;   // transition to M
-                    update_priority(log.addr);
-                }
-                else { // cache state = Shared
-                    auto l2_bank_num = get_llc_bank(log.addr);
-                    upgrReplyWait.insert(log.addr);
-                    unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, l2_bank_num, true, log.addr));
-                    proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(upgr));
-                }
-            }
-            else {  // read; can always do if in cache
+void L1::check_nacked_requests(Processor &proc) {
+    if(outstandingNacks.empty()) { return; }
+    // AYUSH : should I serve only one nacked request or all nacked requests whose counter is 0? currently only serving one nack.
+    ull block_id_nack_request = 0;
+    bool issue_nacked_request = false;
+    for(auto &it : outstandingNacks) {
+        if(it.second.waitForNumCycles > 0) {
+            it.second.waitForNumCycles--;
+        }
+        if(it.second.waitForNumCycles == 0) { issue_nacked_request = true; block_id_nack_request = it.first; }
+    }
+    if(!issue_nacked_request) { return; }
+    auto &nack_struct = outstandingNacks[block_id_nack_request];
+    switch (nack_struct.msg)
+    {
+        case MsgType::GET: {
+            assert(getReplyWait.contains(block_id_nack_request));
+            unique_ptr<Message> get(new Get(MsgType::GET, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+            proc.L1Caches[get->to].incomingMsg.push_back(move(get));
+            break;
+        }
+        
+        case MsgType::GETX: {
+            assert(getXReplyWait.contains(block_id_nack_request));
+            unique_ptr<Message> getx(new Getx(MsgType::GETX, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+            proc.L1Caches[getx->to].incomingMsg.push_back(move(getx));
+            break;
+        }
+        
+        case MsgType::UPGR: {
+            assert(upgrReplyWait.contains(block_id_nack_request));
+            unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+            proc.L1Caches[upgr->to].incomingMsg.push_back(move(upgr));
+            break;
+        }
+
+        default:{
+            assert(false); // only these three types of nacks possible
+            break;
+        }
+    }
+    outstandingNacks.erase(block_id_nack_request);
+}
+
+void L1::process_log(Processor &proc) {
+    auto log = logs.front();
+    logs.pop_front();
+    if(check_cache(log.addr)) { // also update priority except for the case of upgr.
+        if(log.isStore) { // write
+            auto &cache_block = cacheData[set_from_addr(log.addr)][log.addr];
+            if(cache_block.state == State::M) {
+                // can simply do the store.
+                assert(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
                 update_priority(log.addr);
+            }
+            else if(cache_block.state == State::E) {
+                assert(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
+                cache_block.state = State::M;   // transition to M
+                update_priority(log.addr);
+            }
+            else { // cache state = Shared
+                auto l2_bank_num = get_llc_bank(log.addr);
+                upgrReplyWait.insert(log.addr);
+                unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, l2_bank_num, true, log.addr));
+                proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(upgr));
+            }
+        }
+        else {  // read; can always do if in cache
+            update_priority(log.addr);
+        }
+    }
+    else {
+        if(log.isStore) {
+            if(getXReplyWait.contains(log.addr)) {
+                // do nothing, already sent a Getx
+            }
+            else if(upgrReplyWait.contains(log.addr)) {
+                // AYUSH : what to do? send Getx?
+                assert(false);
+            }
+            else { // even if we have already sent a Get request, we need to send a Getx.
+                // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and
+                auto l2_bank_num = get_llc_bank(log.addr);
+                getXReplyWait.insert(log.addr);
+                unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
+                proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(getx));
             }
         }
         else {
-            if(log.isStore) {
-                if(getXReplyWait.contains(log.addr)) {
-                    // do nothing, already sent a Getx
-                }
-                else if(upgrReplyWait.contains(log.addr)) {
-                    // AYUSH : what to do? send Getx?
-                    assert(false);
-                }
-                else { // even if we have already sent a Get request, we need to send a Getx.
-                    // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and
-                    auto l2_bank_num = get_llc_bank(log.addr);
-                    getXReplyWait.insert(log.addr);
-                    unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
-                    proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(getx));
-                }
+            if(getReplyWait.contains(log.addr)) {
+                // already sent Get
+            }
+            else if(getXReplyWait.contains(log.addr)) {
+                // already sent Getx
+            }
+            else if(upgrReplyWait.contains(log.addr)) {
+                // AYUSH : what to do? send Getx?
+                assert(false);
             }
             else {
-                if(getReplyWait.contains(log.addr)) {
-                    // already sent Get
-                }
-                else if(getXReplyWait.contains(log.addr)) {
-                    // already sent Getx
-                }
-                else if(upgrReplyWait.contains(log.addr)) {
-                    // AYUSH : what to do? send Getx?
-                    assert(false);
-                }
-                else {
-                    auto l2_bank_num = get_llc_bank(log.addr);
-                    getReplyWait.insert(log.addr);
-                    unique_ptr<Message> get(new Get(MsgType::GET, id, l2_bank_num, true, log.addr));
-                    proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(get));
-                }
+                auto l2_bank_num = get_llc_bank(log.addr);
+                getReplyWait.insert(log.addr);
+                unique_ptr<Message> get(new Get(MsgType::GET, id, l2_bank_num, true, log.addr));
+                proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(get));
             }
         }
+    }
+}
+
+bool L1::process(Processor &proc) {
+    bool progress = false;
+    read_if_reqd();
+    check_nacked_requests(proc);
+    if(!logs.empty() and proc.nextGlobalMsgToProcess >= logs.front().time) { // process from trace
+        if(proc.nextGlobalMsgToProcess == logs.front().time) {proc.nextGlobalMsgToProcess++;}
+        progress = true;
+        process_log(proc);
     }
     if(!incomingMsg.empty()) {
         progress = true;

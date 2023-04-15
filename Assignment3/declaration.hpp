@@ -311,6 +311,8 @@ class L1 : public Cache {
         cacheBlock evict_replace(Processor& proc, ull addr, State state);
         int get_llc_bank(ull addr);
         bool process(Processor &proc);
+        void process_log(Processor &proc);
+        void check_nacked_requests(Processor &proc);
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
             this->inputTrace = open(tmp.c_str(), O_RDONLY);

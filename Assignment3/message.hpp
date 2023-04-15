@@ -1,9 +1,9 @@
 #pragma once
 #include "declaration.hpp"
 
-bool NACKStruct::operator<(const NACKStruct& other) {
-    return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr);
-}
+// bool NACKStruct::operator<(const NACKStruct& other) {
+//     return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr);
+// }
 
 void UpgrAck::handle(Processor &proc, bool toL1) {}
 
@@ -18,6 +18,7 @@ void Inv::handle(Processor &proc, bool toL1) {
         proc.L1Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
     }
     else {
+        assert(!l1.upgrReplyWait.contains(blockAddr));
         // generate inv ack to be sent to 'from' LLC; for inclusive purpose.
         auto st = l1.set_from_addr(blockAddr);
         if(l1.check_cache(blockAddr) and (l1.cacheData[st][blockAddr].state == State::M or l1.cacheData[st][blockAddr].state == State::E)) { // send writeback if cachestate in M or E
@@ -349,40 +350,44 @@ void Wb::handle(Processor &proc, bool toL1) {
             auto st = l2.set_from_addr(blockAddr);
             auto &dir_ent = l2.directory[st][blockAddr];
             if(dir_ent.pending) {  // we expected a writeback.
-                dir_ent.pending = false;
-                if(!inResponseToGet) { // need to forward it.
-                    if(dir_ent.ownerId == from) { // directory going from M -> S, since owner did not change; forward a Put
-                        int l1_to_send_get = -1;
-                        for(int i = 0; i < dir_ent.bitVector.size(); i++) {
-                            if(dir_ent.bitVector.test(i) and i != from) {
-                                l1_to_send_get = i;
+                if(!dir_ent.toBeReplaced) {
+                    dir_ent.pending = false;
+                    if(!inResponseToGet) { // need to forward it.
+                        if(dir_ent.ownerId == from) { // directory going from M -> S, since owner did not change; forward a Put
+                            int l1_to_send_get = -1;
+                            for(int i = 0; i < dir_ent.bitVector.size(); i++) {
+                                if(dir_ent.bitVector.test(i) and i != from) {
+                                    l1_to_send_get = i;
+                                }
                             }
+                            assert(l1_to_send_get != -1);
+                            unique_ptr<Message> put(new Put(MsgType::PUT, from, l1_to_send_get, true, blockAddr));
+                            proc.L1Caches[put->to].incomingMsg.push_back(move(put));
                         }
-                        assert(l1_to_send_get != -1);
-                        unique_ptr<Message> put(new Put(MsgType::PUT, from, l1_to_send_get, true, blockAddr));
-                        proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                        else { // since owner changed, directory going from M -> M state, forward a Putx.
+                            unique_ptr<Message> putx(new Putx(MsgType::PUTX, from, dir_ent.ownerId, true, blockAddr, 0, State::M));
+                            proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                        }
                     }
-                    else { // since owner changed, directory going from M -> M state, forward a Putx.
-                        unique_ptr<Message> putx(new Putx(MsgType::PUTX, from, dir_ent.ownerId, true, blockAddr, 0, State::M));
-                        proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
-                    }
-                }
-                else {  // this means that writeback was in response to a get and we do not need to forward it
+                    else {  // this means that writeback was in response to a get and we do not need to forward it
 
+                    }
                 }
-            }
-            else {  // we did not expect a writeback; this must mean that cache block has been evicted.
-                if(l2.numInvAcksToCollectForIncl.contains(blockAddr)) { // if evicted due to inclusivity purpose
+                else { // evicted for invlusive purpose
+                    assert(l2.numInvAcksToCollectForIncl.contains(blockAddr));
                     auto &inv_ack_struct = l2.numInvAcksToCollectForIncl[blockAddr];
                     assert(inv_ack_struct.waitForNumMessages == 1 and inv_ack_struct.L1CacheNums.begin()->second);
                     int l1_cache_num = (inv_ack_struct.L1CacheNums.begin()->first);
                     unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_cache_num, false, inv_ack_struct.blockAddr, 0, State::M));
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                 }
-                else { // this means that cache block was evicted and we did not send any inv request.
-                    assert(dir_ent.dirty);
-                    dir_ent.bitVector.reset();
-                }
+            }
+            else {  // this means that cache block was evicted and we did not send any inv request. 
+                assert(dir_ent.dirty);
+                assert(dir_ent.ownerId == from);
+                assert(!dir_ent.toBeReplaced);
+                dir_ent.bitVector.reset();
+                dir_ent.bitVector.set(from);
             }
         }
         else { // cannot happen; wb cannot be sent to L1
@@ -434,20 +439,25 @@ void Nack::handle(Processor &proc, bool toL1) {
     }
     else {
         if(toL1) {
+            auto &l1 = proc.L1Caches[to];
+            assert(!l1.outstandingNacks.contains(blockAddr));
             switch (msgType)
             {
                 case MsgType::GET: {
-
+                    assert(l1.getReplyWait.contains(blockAddr));
+                    l1.outstandingNacks[blockAddr].msg = MsgType::GET;
                     break;
                 }
 
                 case MsgType::GETX: {
-                    
+                    assert(l1.getXReplyWait.contains(blockAddr));
+                    l1.outstandingNacks[blockAddr].msg = MsgType::GETX;
                     break;
                 }
 
                 case MsgType::UPGR: {
-                    
+                    assert(l1.upgrReplyWait.contains(blockAddr));
+                    l1.outstandingNacks[blockAddr].msg = MsgType::UPGR;
                     break;
                 }
 
@@ -456,6 +466,7 @@ void Nack::handle(Processor &proc, bool toL1) {
                     break;
                 }
             }
+            l1.outstandingNacks[blockAddr].waitForNumCycles = NACK_WAIT_CYCLES;
         }
         else { // L2 won't send a NACK to L2
             assert(false);

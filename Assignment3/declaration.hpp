@@ -11,8 +11,11 @@
 #include <bitset>
 #include <iostream>
 #include <memory>
-#include <assert.h>
 #include <limits>
+
+// #define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
+#include <assert.h>
+
 
 using std::set, std::unordered_map, std::vector, std::deque, std::bitset, std::map, std::unordered_set, std::pair;
 using std::unique_ptr, std::make_unique, std::move;
@@ -32,6 +35,7 @@ constexpr int MAX_PROC = 64;
 constexpr int LOG_BLOCK_SIZE = 6;
 constexpr int L2_BANK_BITS = 0x7;
 constexpr int NUM_CACHE = 8;
+constexpr int NACK_WAIT_CYCLES = 5;
 int trace[MAX_PROC];
 
 enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX, UPGR, UPGR_ACK };
@@ -51,11 +55,11 @@ struct LogStruct {
 
 struct NACKStruct {
     MsgType msg;
-    ull blockAddr;
+    ull waitForNumCycles;
 
-    NACKStruct(): msg(MsgType::GET), blockAddr(0) {}
-    NACKStruct(NACKStruct&& other) noexcept: msg(move(other.msg)), blockAddr(move(other.blockAddr)) {}
-    bool operator<(const NACKStruct& other);
+    NACKStruct(): msg(MsgType::GET), waitForNumCycles(0) {}
+    NACKStruct(NACKStruct&& other) noexcept: msg(move(other.msg)), waitForNumCycles(move(other.waitForNumCycles)) {}
+    // bool operator<(const NACKStruct& other);
 };
 
 struct DirEnt {
@@ -63,12 +67,14 @@ struct DirEnt {
     int ownerId; // could store owner here instead of actually storing it in the bitvector
     bool dirty;
     bool pending; // is a boolean enough, do we need more?
+    bool toBeReplaced; // needed for inclusive eviction
 
-    DirEnt(): dirty(true), ownerId(0), pending(false) { bitVector.reset(); };
+    DirEnt(): dirty(true), ownerId(0), pending(false), toBeReplaced(false) { bitVector.reset(); };
     DirEnt(DirEnt&& other) noexcept: dirty(move(other.dirty)),
         bitVector(move(other.bitVector)),
         ownerId(move(other.ownerId)),
-        pending(move(other.pending)) {}
+        pending(move(other.pending)),
+        toBeReplaced(move(other.toBeReplaced)) {}
 };
 
 struct cacheBlock {
@@ -239,7 +245,7 @@ class Cache {
         // probably need these as public
         vector<unordered_map<ull, cacheBlock>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
-        map<NACKStruct, int> outstandingNacks;
+        unordered_map<ull, NACKStruct> outstandingNacks;
         // unordered_map<ull, State> cacheState; // not required, already maintained in cacheBlock.
         int id; // id of cache
     public:
@@ -269,6 +275,7 @@ class L1 : public Cache {
         friend class Putx;
         friend class Inv;
         friend class InvAck;
+        friend class Nack;
         struct InvAckStruct {
             int numAckToCollect; // MUST BE AN INT, CAN GO BELOW ZERO WHILE COUNTING!
             bool getReceived, getXReceived; // did we receive any Get/GetX while we were waiting for inv acks?
@@ -373,6 +380,7 @@ class Processor {
         friend class Getx;
         friend class Wb;
         friend class Upgr;
+        friend class Nack;
         int numCycles; // number of Cycles
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;

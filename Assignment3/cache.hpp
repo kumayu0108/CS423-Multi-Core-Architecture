@@ -57,7 +57,7 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
         // we get put request only if in S state in directory.
         cacheData[st][addr] = {nwTime, state};
         return {evictAddr, State::I};
-   }
+    }
 
     evict(evictAddr); // update priority and all that.
     ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
@@ -306,6 +306,7 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
     auto [time, blockAddr_to_be_replaced] = *it;
     // AYUSH : would this cause any issue?
     directory[st][blockAddr_to_be_replaced].pending = true;
+    directory[st][blockAddr_to_be_replaced].toBeReplaced = true;
     auto &inv_ack_struct = numInvAcksToCollectForIncl[blockAddr_to_be_replaced];
     if(directory[st][blockAddr_to_be_replaced].dirty) {
         int owner = directory[st][blockAddr_to_be_replaced].ownerId;

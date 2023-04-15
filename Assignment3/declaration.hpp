@@ -184,7 +184,7 @@ class Put: public Message {
 class Putx: public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
-        int numAckToCollect;
+        int numAckToCollect; // MUST BE AN INTEGER!! CAN GO NEGATIVE INSIDE L1 STRUCT.
         State state;
         void handle(Processor &proc, bool toL1);
         Putx(const Putx&) = delete; // delete copy ctor explicitly, since it's a move only cls.
@@ -269,7 +269,7 @@ class L1 : public Cache {
         friend class Inv;
         friend class InvAck;
         struct InvAckStruct {
-            ull numAckToCollect;
+            int numAckToCollect; // MUST BE AN INT, CAN GO BELOW ZERO WHILE COUNTING!
             bool getReceived, getXReceived; // did we receive any Get/GetX while we were waiting for inv acks?
             int to; // if we received Get/GetX, where do I need to send Put.
             InvAckStruct() : numAckToCollect(0), getReceived(false), getXReceived(false), to(0) {}

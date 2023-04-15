@@ -25,7 +25,7 @@ What if we sent Upgr and before receiving upgr ack, evict the block, then home s
 
 If the directory state of an L2 cache block is pending, you should avoid replacing the block. However, you may find yourself in a situation where all blocks in an L2 cache set are in pending state and you need to fill a new block into such a set. To handle this, you need to maintain the replaced block in a separate buffer until the transaction involving the block has finished
 
-skip blocks in upgrReply wait in evict_replace.
+skip blocks in upgrReply wait in evict_replace. (done)
 
 
 

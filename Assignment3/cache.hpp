@@ -48,16 +48,24 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
     auto &l1 = proc.L1Caches[id];
     auto &cacheData = l1.cacheData;
     auto &timeBlockAdded = l1.timeBlockAdded;
-    auto [leastTime, evictAddr] = *timeBlockAdded[st].begin(); // find LRU time cache block
 
     if(cacheData[st].size() < NUM_L1_WAYS) { // no need to evict, need to create new cache block
-        ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
-        // update cache state correctly.
-        timeBlockAdded[st].insert({nwTime, addr});
-        // we get put request only if in S state in directory.
-        cacheData[st][addr] = {nwTime, state};
-        return {evictAddr, State::I};
+            ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+            // update cache state correctly.
+            timeBlockAdded[st].insert({nwTime, addr});
+            // we get put request only if in S state in directory.
+            cacheData[st][addr] = {nwTime, state};
+            return {0, State::I}; // need not evict, return default value;
+        }
+
+    auto [evictAddrTime, evictAddr] = *timeBlockAdded[st].rbegin(); // initalise actual value to max time.
+    for(auto it : timeBlockAdded[st]) {
+        // only need to check upgrReply because that is the only case where block can be pending and in the cache.
+        if(numAckToCollect.contains(it.second) or upgrReplyWait.contains(it.second)) continue;
+        if(it.first < evictAddrTime) evictAddr = it.second, evictAddrTime = it.first;
     }
+    // if this is true, evictAddrTime hasnt been updated. means, all blocks in set are waiting for Acks. Need to handle this.
+    if(evictAddrTime == timeBlockAdded[st].rbegin()->first) { assert(false); }
 
     evict(evictAddr); // update priority and all that.
     ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
@@ -100,14 +108,14 @@ void L1::check_nacked_requests(Processor &proc) {
             proc.L1Caches[get->to].incomingMsg.push_back(move(get));
             break;
         }
-        
+
         case MsgType::GETX: {
             assert(getXReplyWait.contains(block_id_nack_request));
             unique_ptr<Message> getx(new Getx(MsgType::GETX, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
             proc.L1Caches[getx->to].incomingMsg.push_back(move(getx));
             break;
         }
-        
+
         case MsgType::UPGR: {
             assert(upgrReplyWait.contains(block_id_nack_request));
             unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));

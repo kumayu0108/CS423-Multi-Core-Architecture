@@ -184,16 +184,16 @@ class Put: public Message {
 class Putx: public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
-        int numInvToCollect;
+        int numAckToCollect;
         State state;
         void handle(Processor &proc, bool toL1);
         Putx(const Putx&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         Putx& operator=(const Putx&) = delete; // delete copy assignment ctor too.
         Putx() : Message() {}
-        Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numInvToCollect(move(other.numInvToCollect)),
+        Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numAckToCollect(move(other.numAckToCollect)),
             state(move(other.state)) {}
-        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numInvToCollect, State state = State::M) :
-        Message(msgType, from, to, fromL1), blockAddr(blockId), numInvToCollect(numInvToCollect), state(state) {}
+        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numAckToCollect, State state = State::M) :
+        Message(msgType, from, to, fromL1), blockAddr(blockId), numAckToCollect(numAckToCollect), state(state) {}
 };
 
 class Nack: public Message {
@@ -224,14 +224,14 @@ class Upgr: public Message {
 class UpgrAck: public Message {
     public:
         ull blockAddr; // which cache block ADDR to be evicted?
-        int numInvToCollect;
+        int numAckToCollect;
         void handle(Processor &proc, bool toL1);
         UpgrAck(const UpgrAck&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         UpgrAck& operator=(const UpgrAck&) = delete; // delete copy assignment ctor too.
         UpgrAck() : Message() {}
-        UpgrAck(UpgrAck&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numInvToCollect(move(other.numInvToCollect)) {}
-        UpgrAck(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numInvToCollect) :
-        Message(msgType, from, to, fromL1), blockAddr(blockId), numInvToCollect(numInvToCollect) {}
+        UpgrAck(UpgrAck&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numAckToCollect(move(other.numAckToCollect)) {}
+        UpgrAck(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numAckToCollect) :
+        Message(msgType, from, to, fromL1), blockAddr(blockId), numAckToCollect(numAckToCollect) {}
 };
 
 class Cache {
@@ -269,12 +269,12 @@ class L1 : public Cache {
         friend class Inv;
         friend class InvAck;
         struct InvAckStruct {
-            ull numInvToCollect;
+            ull numAckToCollect;
             bool getReceived, getXReceived; // did we receive any Get/GetX while we were waiting for inv acks?
             int to; // if we received Get/GetX, where do I need to send Put.
-            InvAckStruct() : numInvToCollect(0), getReceived(false), getXReceived(false), to(0) {}
+            InvAckStruct() : numAckToCollect(0), getReceived(false), getXReceived(false), to(0) {}
             InvAckStruct(InvAckStruct && other) noexcept :
-                numInvToCollect(move(other.numInvToCollect)), getReceived(move(other.getReceived)), getXReceived(move(other.getXReceived)), to(move(other.to)) {}
+                numAckToCollect(move(other.numAckToCollect)), getReceived(move(other.getReceived)), getXReceived(move(other.getXReceived)), to(move(other.to)) {}
         };
         int inputTrace; // from where you would read line to line
         char buffer[MAX_BUF_L1 * sizeof(LogStruct) + 2];
@@ -295,7 +295,7 @@ class L1 : public Cache {
         unordered_set<ull> getReplyWait;
         unordered_set<ull> getXReplyWait;
         unordered_set<ull> upgrReplyWait;
-        unordered_map<ull, InvAckStruct> numInvToCollect; // block -> num; used when we want to collect inv acks for Getx request.
+        unordered_map<ull, InvAckStruct> numAckToCollect; // block -> num; used when we want to collect inv acks for Getx request.
         unordered_set<ull> writeBackAckWait; // wait for wb ack;
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr);
@@ -312,7 +312,7 @@ class L1 : public Cache {
         L1(L1&& other) noexcept : Cache(move(other)),
             inputTrace(move(other.inputTrace)),
             tempSpace(move(other.tempSpace)),
-            numInvToCollect(move(other.numInvToCollect)),
+            numAckToCollect(move(other.numAckToCollect)),
             getReplyWait(move(other.getReplyWait)),
             getXReplyWait(move(other.getXReplyWait)),
             upgrReplyWait(move(other.upgrReplyWait)),
@@ -366,6 +366,7 @@ class Processor {
         friend class LLCBank;
         friend class Inv;
         friend class Put;
+        friend class Putx;
         friend class InvAck;
         friend class Get;
         friend class Getx;

@@ -5,7 +5,6 @@ bool NACKStruct::operator<(const NACKStruct& other) {
     return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr);
 }
 
-void Putx::handle(Processor &proc, bool toL1) {}
 void Nack::handle(Processor &proc, bool toL1) {}
 void UpgrAck::handle(Processor &proc, bool toL1) {}
 
@@ -38,17 +37,17 @@ void InvAck::handle(Processor &proc, bool toL1) {
         if(toL1) { // inv ack sent to another L1
             auto &l1 = proc.L1Caches[to];
             // since we collect an invalidation this means that this entry should contain this block address; HOWEVER, can inv acks arrive before invs?
-            // assert(l1.numInvToCollect.contains(blockAddr));
-            if (l1.numInvToCollect.contains(blockAddr)) {
-                l1.numInvToCollect[blockAddr].numInvToCollect--;
+            // assert(l1.numAckToCollect.contains(blockAddr));
+            if (l1.numAckToCollect.contains(blockAddr)) {
+                l1.numAckToCollect[blockAddr].numAckToCollect--;
             }
             else {
-                l1.numInvToCollect[blockAddr].numInvToCollect++;
+                l1.numAckToCollect[blockAddr].numAckToCollect++;
             }
             // this could happen in PUTX
-            if(l1.numInvToCollect[blockAddr].numInvToCollect == 0) { // update priority and put in cache.
+            if(l1.numAckToCollect[blockAddr].numAckToCollect == 0) { // update priority and put in cache.
                 l1.evict_replace(proc, blockAddr, State::M);
-                auto &inv_ack_struct = l1.numInvToCollect[blockAddr];
+                auto &inv_ack_struct = l1.numAckToCollect[blockAddr];
                 auto st = l1.set_from_addr(blockAddr);
                 if(inv_ack_struct.getReceived) {
                     assert(!inv_ack_struct.getXReceived); // cannot have received both get and getx as directory would go in pending state.
@@ -69,7 +68,7 @@ void InvAck::handle(Processor &proc, bool toL1) {
                 else {
                     l1.cacheData[st][blockAddr].state = State::M; // since it collected invalidations from everyone, it can transition to M.
                 }
-                l1.numInvToCollect.erase(blockAddr);
+                l1.numAckToCollect.erase(blockAddr);
             }
         }
         else {  // inv ack sent to L2 (for inclusivity)
@@ -129,8 +128,7 @@ void Put::handle(Processor &proc, bool toL1) {
 
 // update priority for cache blocks
 void Get::handle(Processor &proc, bool toL1) {
-    if(fromL1) { // this means message is sent to LLC bank
-        // assert(toL1); // L1 won't send Get to L1; but L2 would send Get to L1 masking itself as L1
+    if(fromL1) {
         if(!toL1) {
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
@@ -199,9 +197,9 @@ void Get::handle(Processor &proc, bool toL1) {
                 assert(!l1.writeBackAckWait.contains(blockAddr));
                 l1.writeBackAckWait.insert(blockAddr);
             }
-            else if(l1.numInvToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.
-                l1.numInvToCollect[blockAddr].getReceived = true;
-                l1.numInvToCollect[blockAddr].to = from;
+            else if(l1.numAckToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.
+                l1.numAckToCollect[blockAddr].getReceived = true;
+                l1.numAckToCollect[blockAddr].to = from;
             }
             else {  // AYUSH : if we received get, but block has already been evicted , what to do??? I think we should drop this Get ; currently dropping
                 // assert(false);
@@ -209,6 +207,24 @@ void Get::handle(Processor &proc, bool toL1) {
         }
     }
     else {  // this should not happen since whenever L2 sends a Get to L1, it masks itself as the requestor L1, to let the receiver of Get know whom to send the message.
+        assert(false);
+    }
+}
+
+//update priority of blocks as much as possible who were in the pending state.
+void Putx::handle(Processor &proc, bool toL1) {
+    if(toL1) {
+        auto &l1 = proc.L1Caches[to];
+        assert(l1.getXReplyWait.contains(blockAddr)); // putx send in reply only to Getx
+        l1.getXReplyWait.erase(blockAddr); // got a reply!
+        if(numAckToCollect == 0) { // no need to wait, can include block immediately.
+            l1.evict_replace(proc, blockAddr, state);
+        }
+        else {
+
+        }
+    }
+    else { // putx request cant be sent to L2.
         assert(false);
     }
 }
@@ -284,9 +300,9 @@ void Getx::handle(Processor &proc, bool toL1) {
                 assert(!l1.writeBackAckWait.contains(blockAddr));
                 l1.writeBackAckWait.insert(blockAddr);
             }
-            else if(l1.numInvToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.
-                l1.numInvToCollect[blockAddr].getXReceived = true;
-                l1.numInvToCollect[blockAddr].to = from;
+            else if(l1.numAckToCollect.contains(blockAddr)) { // we are in the midst of receiving inv acks for this block, we do not yet own the block.
+                l1.numAckToCollect[blockAddr].getXReceived = true;
+                l1.numAckToCollect[blockAddr].to = from;
             }
             else {  // currently dropping this Getx; this would happen when L1 evicted this block and is now receiving
 

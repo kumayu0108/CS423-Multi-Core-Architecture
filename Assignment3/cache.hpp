@@ -118,6 +118,7 @@ bool L1::process(Processor &proc) {
                 }
                 else if(upgrReplyWait.contains(log.addr)) {
                     // AYUSH : what to do? send Getx?
+                    assert(false);
                 }
                 else { // even if we have already sent a Get request, we need to send a Getx.
                     // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and
@@ -136,6 +137,7 @@ bool L1::process(Processor &proc) {
                 }
                 else if(upgrReplyWait.contains(log.addr)) {
                     // AYUSH : what to do? send Getx?
+                    assert(false);
                 }
                 else {
                     auto l2_bank_num = get_llc_bank(log.addr);

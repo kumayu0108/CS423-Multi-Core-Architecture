@@ -29,7 +29,7 @@ constexpr ull L1_SET_BITS = 0x3f;
 constexpr int L2_SET_BITS = 0x1ff;
 constexpr unsigned NUM_L1_WAYS = 8;
 constexpr unsigned NUM_L2_WAYS = 16;
-constexpr int MAX_BUF_L1 = 10;
+constexpr int MAX_BUF_L1 = 100;
 constexpr int LOG_L2_BANKS = 3;
 constexpr int MAX_PROC = 64;
 constexpr int LOG_BLOCK_SIZE = 6;
@@ -317,6 +317,18 @@ class L1 : public Cache {
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
             this->inputTrace = open(tmp.c_str(), O_RDONLY);
+            while(true) {
+                int num_bytes_read = read(inputTrace, buffer, MAX_BUF_L1 * sizeof(LogStruct));
+                if(num_bytes_read == 0) {
+                    break;
+                }
+                int ind = 0;
+                while(ind < num_bytes_read and ind + sizeof(LogStruct) <= num_bytes_read){
+                    LogStruct *tmp_struct = (LogStruct *)&buffer[ind];
+                    logs.push_back(*tmp_struct);
+                    ind += sizeof(LogStruct);
+                }
+            }
         }
         L1(const L1&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         L1& operator=(const L1&) = delete; // delete copy assignment ctor too.
@@ -394,7 +406,7 @@ class Processor {
         Processor(): numCycles(0), nextGlobalMsgToProcess(0) {
             for(int i = 0; i < NUM_CACHE; i++) {
                 L1Caches.emplace_back(i);
-                L2Caches.emplace_back(LLCBank(i));
+                L2Caches.emplace_back(i);
             }
         }
         Processor(Processor&& other) noexcept:

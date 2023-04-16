@@ -286,6 +286,7 @@ int L1::get_llc_bank(ull addr) {
 bool LLCBank::process(Processor &proc) {
     // since msgId isn't associated with messages, we can always process a message.
     // if(nextGlobalMsgToProcess < incomingMsg.front()->msgId) { return false; }
+    if(incomingMsg.empty()) {return false;}
     auto msg = move(incomingMsg.front());
     incomingMsg.pop_front();
     // cast unique pointer of base class to derived class with appropriate variables
@@ -344,7 +345,7 @@ bool LLCBank::process(Processor &proc) {
             break;
         }
     }
-    return false;
+    return true;
 }
 
 // not reqd as of now, + insane design overhead.
@@ -433,4 +434,5 @@ void Processor::run() {
         numCycles++;
         if(!progressMade) {break;}
     }
+    std::cout << "Number Of Cycles : " << numCycles << "\n";
 }

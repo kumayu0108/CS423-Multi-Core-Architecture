@@ -11,5 +11,5 @@ int main(int argc, char *argv[]){
     // }
 
     Processor proc;
-    // proc.run();
+    proc.run();
 }

@@ -89,7 +89,7 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
     msg.reset(static_cast<Message *>(inv_msg.release()))
 
 bool L1::check_nacked_requests(Processor &proc) {
-    if(outstandingNacks.empty()) { return; }
+    if(outstandingNacks.empty()) { return false; }
     // AYUSH : should I serve only one nacked request or all nacked requests whose counter is 0? currently only serving one nack.
     ull block_id_nack_request = 0;
     bool issue_nacked_request = false;

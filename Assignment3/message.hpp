@@ -5,7 +5,6 @@
 //     return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr);
 // }
 
-void UpgrAck::handle(Processor &proc, bool toL1) {}
 
 void Inv::handle(Processor &proc, bool toL1) {
     auto &l1 = proc.L1Caches[to];
@@ -46,7 +45,7 @@ void InvAck::handle(Processor &proc, bool toL1) {
                 l1.numAckToCollect[blockAddr].numAckToCollect--;
             }
             // this could happen in PUTX
-            //NOTE:: The same code also exists in Putx. If you change this here, change it there too
+            //NOTE:: The same code also exists in PutX/UpgrAck. If you change this here, change it there too
             if(l1.numAckToCollect[blockAddr].numAckToCollect == 0) { // update priority and put in cache.
                 l1.evict_replace(proc, blockAddr, State::M);
                 auto &inv_ack_struct = l1.numAckToCollect[blockAddr];
@@ -232,7 +231,7 @@ void Putx::handle(Processor &proc, bool toL1) {
             if(inv_ack_struct.numAckToCollect == 0) {
                 // can go ahead and allocate block
                 l1.evict_replace(proc, blockAddr, state);
-                //NOTE:: The same code also exists in InvAck. If you change this here, change it there too
+                //NOTE:: The same code also exists in InvAck/UpgrAck. If you change this here, change it there too
                 if(inv_ack_struct.getReceived) {
                     assert(!inv_ack_struct.getXReceived); // cannot have received both get and getx as directory would go in pending state.
                     unique_ptr<Message> put(new Put(MsgType::PUT, to, inv_ack_struct.to, true, blockAddr));
@@ -382,7 +381,7 @@ void Wb::handle(Processor &proc, bool toL1) {
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                 }
             }
-            else {  // this means that cache block was evicted and we did not send any inv request. 
+            else {  // this means that cache block was evicted and we did not send any inv request.
                 assert(dir_ent.dirty);
                 assert(dir_ent.ownerId == from);
                 assert(!dir_ent.toBeReplaced);
@@ -395,6 +394,53 @@ void Wb::handle(Processor &proc, bool toL1) {
         }
     }
     else { // cannot happen; wb cannot come from L2
+        assert(false);
+    }
+}
+
+void UpgrAck::handle(Processor &proc, bool toL1) {
+    if(!fromL1) {
+        if(toL1) {
+            auto &l1 = proc.L1Caches[to];
+            assert(l1.upgrReplyWait.contains(blockAddr)); // waiting for upgrAck
+            l1.upgrReplyWait.erase(blockAddr); // got the reply.
+            if(l1.numAckToCollect.contains(blockAddr)) { // already receiving acks
+                l1.numAckToCollect[blockAddr].numAckToCollect += numAckToCollect;
+            }
+            else { // initalise the structure :)
+                l1.numAckToCollect[blockAddr].numAckToCollect = 0;
+                l1.numAckToCollect[blockAddr].numAckToCollect += numAckToCollect;
+            }
+            auto &inv_ack_struct = l1.numAckToCollect[blockAddr];
+            auto st = l1.set_from_addr(blockAddr);
+            if(inv_ack_struct.numAckToCollect == 0) {
+                // can finally go ahead and change state of block
+                l1.cacheData[st][blockAddr].state = State::M;
+                //NOTE:: The same code also exists in InvAck/PutX. If you change this here, change it there too
+                if(inv_ack_struct.getReceived) {
+                    assert(!inv_ack_struct.getXReceived); // cannot have received both get and getx as directory would go in pending state.
+                    unique_ptr<Message> put(new Put(MsgType::PUT, to, inv_ack_struct.to, true, blockAddr));
+                    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l1.get_llc_bank(blockAddr), true, blockAddr, true));
+                    l1.cacheData[st][blockAddr].state = State::S; // since it received Get earlier, so it transitions to S, after generating a writeback.
+                    proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                }
+                else if(inv_ack_struct.getXReceived) {
+                    assert(!inv_ack_struct.getReceived); // cannot have received both get and getx as directory would go in pending state.
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, inv_ack_struct.to, true, blockAddr, 0));
+                    unique_ptr<Message> wb(new Wb(MsgType::WB, to, l1.get_llc_bank(blockAddr), true, blockAddr, true));
+                    l1.evict(blockAddr); // since it received Getx, it has to also invalidate the block
+                    proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                }
+                l1.numAckToCollect.erase(blockAddr);
+            }
+        }
+        else { // upgrAck cant go to L2.
+            assert(false);
+        }
+    }
+    else { // upgrack cant come from L1 at all
         assert(false);
     }
 }
@@ -415,10 +461,10 @@ void Upgr::handle(Processor &proc, bool toL1) {
                 proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
             }
             else {
-                unique_ptr<Message> upgr_ack(new UpgrAck(MsgType::UPGR_ACK, to, from, false, blockAddr, dir_ent.bitVector.count()));
+                unique_ptr<Message> upgr_ack(new UpgrAck(MsgType::UPGR_ACK, to, from, false, blockAddr, dir_ent.bitVector.count() - 1));
                 proc.L1Caches[upgr_ack->to].incomingMsg.push_back(move(upgr_ack));
                 for(int i = 0; i < dir_ent.bitVector.size(); i++) {
-                    if(!dir_ent.bitVector.test(i)) {continue;}
+                    if(!dir_ent.bitVector.test(i) or i == from) continue;
                     unique_ptr<Message> inv(new Inv(MsgType::INV, from, i, true, blockAddr)); // masking to let this l1 know it needs to send inv to 'from' l1.
                     proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
                 }

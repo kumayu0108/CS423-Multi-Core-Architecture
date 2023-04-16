@@ -60,7 +60,8 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
 
     auto [evictAddrTime, evictAddr] = *timeBlockAdded[st].rbegin(); // initalise actual value to max time.
     for(auto it : timeBlockAdded[st]) {
-        // only need to check upgrReply because that is the only case where block can be pending and in the cache.
+        // only need to check upgrReply because its the only case where block can be pending and in the cache.(both upgrAck and Acks havnt arrived)
+        // Need to check numAckToCollect too because there can be case that upgrReply has arrived but Acks havent.
         if(numAckToCollect.contains(it.second) or upgrReplyWait.contains(it.second)) continue;
         if(it.first < evictAddrTime) evictAddr = it.second, evictAddrTime = it.first;
     }

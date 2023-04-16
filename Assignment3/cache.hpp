@@ -229,26 +229,42 @@ bool L1::process(Processor &proc) {
             }
 
             case MsgType::NACK:{
+                CALL_HANDLER(Nack, true);
                 break;
             }
 
             case MsgType::GETX:{
+                CALL_HANDLER(Getx, true);
                 break;
             }
 
             case MsgType::PUT:{
+                CALL_HANDLER(Put, true);
                 break;
             }
 
             case MsgType::PUTX:{
+                CALL_HANDLER(Putx, true);
                 break;
             }
-
+            // this wb could also be received in response to an Invalidation due to maintaining inclusivity.
             case MsgType::WB:{
+                CALL_HANDLER(Wb, true);
                 break;
             }
 
-            case MsgType::WB_ACK:{
+            case MsgType::WB_ACK:{ // would not happen
+                assert(false);
+                break;
+            }
+
+            case MsgType::UPGR:{
+                CALL_HANDLER(Upgr, true);
+                break;
+            }
+
+            case MsgType::UPGR_ACK:{
+                CALL_HANDLER(UpgrAck, true);
                 break;
             }
         }
@@ -288,26 +304,42 @@ bool LLCBank::process(Processor &proc) {
         }
 
         case MsgType::NACK:{
+            CALL_HANDLER(Nack, false);
             break;
         }
 
         case MsgType::GETX:{
+            CALL_HANDLER(Getx, false);
             break;
         }
 
         case MsgType::PUT:{
+            CALL_HANDLER(Put, false);
             break;
         }
 
         case MsgType::PUTX:{
+            CALL_HANDLER(Putx, false);
             break;
         }
         // this wb could also be received in response to an Invalidation due to maintaining inclusivity.
         case MsgType::WB:{
+            CALL_HANDLER(Wb, false);
             break;
         }
 
-        case MsgType::WB_ACK:{
+        case MsgType::WB_ACK:{ // would not happen
+            assert(false);
+            break;
+        }
+
+        case MsgType::UPGR:{
+            CALL_HANDLER(Upgr, false);
+            break;
+        }
+
+        case MsgType::UPGR_ACK:{
+            CALL_HANDLER(UpgrAck, false);
             break;
         }
     }

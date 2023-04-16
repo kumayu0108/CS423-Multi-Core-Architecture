@@ -6,6 +6,7 @@ class Processor;
 
 // this function only removes this addr from cache & returns if anything got evicted
 bool L1::evict(ull addr) {
+    if(addr == 140722109179200) {std::cout << "evicted\n";}
     assert(check_cache(addr));
     ull st = set_from_addr(addr);
     assert(st < cacheData.size());
@@ -50,34 +51,37 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
     auto &timeBlockAdded = l1.timeBlockAdded;
 
     if(cacheData[st].size() < NUM_L1_WAYS) { // no need to evict, need to create new cache block
-            ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
-            // update cache state correctly.
-            timeBlockAdded[st].insert({nwTime, addr});
-            // we get put request only if in S state in directory.
-            cacheData[st][addr] = {nwTime, state};
-            return {0, State::I}; // need not evict, return default value;
-        }
+        ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+        // update cache state correctly.
+        timeBlockAdded[st].insert({nwTime, addr});
+        // we get put request only if in S state in directory.
+        cacheData[st][addr] = {nwTime, state};
+        return {0, State::I}; // need not evict, return default value;
+    }
 
     auto [evictAddrTime, evictAddr] = *timeBlockAdded[st].rbegin(); // initalise actual value to max time.
     for(auto it : timeBlockAdded[st]) {
         // only need to check upgrReply because its the only case where block can be pending and in the cache.(both upgrAck and Acks havnt arrived)
         // Need to check numAckToCollect too because there can be case that upgrReply has arrived but Acks havent.
         if(numAckToCollect.contains(it.second) or upgrReplyWait.contains(it.second)) continue;
-        if(it.first < evictAddrTime) evictAddr = it.second, evictAddrTime = it.first;
+        if(it.first < evictAddrTime) {evictAddr = it.second, evictAddrTime = it.first; break;}
     }
     // if this is true, evictAddrTime hasnt been updated. means, all blocks in set are waiting for Acks. Need to handle this.
     if(evictAddrTime == timeBlockAdded[st].rbegin()->first) { assert(false); }
+
+    if(cacheData[st][evictAddr].state == State::M or cacheData[st][evictAddr].state == State::E) {
+        int l2_bank = get_llc_bank(evictAddr); // get LLc bank.
+        unique_ptr<Message> wb(new Wb(MsgType::WB, id, l2_bank, true, evictAddr, false));
+        proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+    }
 
     evict(evictAddr); // update priority and all that.
     ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
     timeBlockAdded[st].insert({nwTime, addr});
     cacheData[st][addr] = {nwTime, state};
 
-    int l2_bank = get_llc_bank(evictAddr); // get LLc bank.
-    unique_ptr<Message> wb(new Wb(MsgType::WB, id, l2_bank, true, evictAddr, false));
-    proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
-    assert(!l1.writeBackAckWait.contains(evictAddr));
-    l1.writeBackAckWait.insert(evictAddr);
+    // assert(!l1.writeBackAckWait.contains(evictAddr));
+    // l1.writeBackAckWait.insert(evictAddr);
 
     return {evictAddr, State::I}; // dont believe state. just returning time for now.
 }
@@ -141,6 +145,9 @@ void L1::process_log(Processor &proc) {
             auto &cache_block = cacheData[set_from_addr(log.addr)][log.addr];
             if(cache_block.state == State::M) {
                 // can simply do the store.
+                if(getReplyWait.contains(log.addr) or getXReplyWait.contains(log.addr)) {
+                    std :: cout << log.addr << "\n";
+                }
                 assert(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
                 update_priority(log.addr);
             }
@@ -169,8 +176,12 @@ void L1::process_log(Processor &proc) {
                 // AYUSH : what to do? send Getx?
                 assert(false);
             }
-            else { // even if we have already sent a Get request, we need to send a Getx.
+            else if(getReplyWait.contains(log.addr)){
                 // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and
+                getReplyWait[log.addr] = true;
+            }
+            else {
+                // if(log.addr == 140722109179200) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getXReplyWait.insert(log.addr);
                 unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
@@ -190,7 +201,8 @@ void L1::process_log(Processor &proc) {
             }
             else {
                 auto l2_bank_num = get_llc_bank(log.addr);
-                getReplyWait.insert(log.addr);
+                getReplyWait[log.addr] = false;
+                // if(log.addr == 140722109179200) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
                 unique_ptr<Message> get(new Get(MsgType::GET, id, l2_bank_num, true, log.addr));
                 proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(get));
             }

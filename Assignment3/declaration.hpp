@@ -69,7 +69,7 @@ struct DirEnt {
     bool pending; // is a boolean enough, do we need more?
     bool toBeReplaced; // needed for inclusive eviction
 
-    DirEnt(): dirty(true), ownerId(0), pending(false), toBeReplaced(false) { bitVector.reset(); };
+    DirEnt(): dirty(true), ownerId(-1), pending(false), toBeReplaced(false) { bitVector.reset(); };
     DirEnt(DirEnt&& other) noexcept: dirty(move(other.dirty)),
         bitVector(move(other.bitVector)),
         ownerId(move(other.ownerId)),
@@ -301,7 +301,7 @@ class L1 : public Cache {
         }
     public:
         // getReplyWait and getXReplyWait would be used to check if there is a previous Get/Getx request. They would get cleared on Put/Putx.
-        unordered_set<ull> getReplyWait;
+        unordered_map<ull, bool> getReplyWait;
         unordered_set<ull> getXReplyWait;
         unordered_set<ull> upgrReplyWait;
         unordered_map<ull, InvAckStruct> numAckToCollect; // block -> num; used when we want to collect inv acks for Getx request.

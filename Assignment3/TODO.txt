@@ -28,6 +28,8 @@ If the directory state of an L2 cache block is pending, you should avoid replaci
 
 skip blocks in upgrReply wait in evict_replace. (done)
 
+remove writebackackwait
+
 
 
 ___________________________

@@ -9,7 +9,9 @@
 void Inv::handle(Processor &proc, bool toL1) {
     auto &l1 = proc.L1Caches[to];
     // evict from L1
-    l1.evict(blockAddr);
+    if(l1.check_cache(blockAddr)){
+        l1.evict(blockAddr);
+    }
     if(fromL1) {    // if the message is sent by L1, it means it is because someone requested S/I -> M
         assert(toL1); // any invalidations sent by L1 would be sent to L1
         // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
@@ -105,17 +107,29 @@ void InvAck::handle(Processor &proc, bool toL1) {
     }
 }
 
-// update priority for cache block when evicted.
+// this also updates priority for cache block when evicted.
 void Put::handle(Processor &proc, bool toL1) {
     // VPG : make replace function virtual in Cache class.
     // in GET handle, we have a branch where we replace block and send invs to blocks.
     // basically replace for L2. Put needs us to write replace for L1 basically. Can split into two fns for reuse.
     if(toL1) {
         // L1 is the only receiver, gets data as a block. Now need to place it somewhere.
+        if(blockAddr == 140722109179200) {
+            if(fromL1)
+                std::cout << "put sent by L1 : " << from << " to L1 : " << to << " at 117 : " << proc.numCycles << "\n";
+            else 
+                std::cout << "put sent by L2 : " << from << " to L1 : " << to << " at 119 : " << proc.numCycles << "\n";
+        }
+
         auto &l1 = proc.L1Caches[to];
         //if the block already exists, do nothing. (is this even possible?)
-        if(l1.check_cache(blockAddr)) { return; }
+        if(l1.check_cache(blockAddr)) { assert(false); return; }
         assert(l1.getReplyWait.contains(blockAddr));  // since put would only be a reply to Get.
+        if(l1.getReplyWait[blockAddr]) { // meaning there was atleast a store miss.
+            l1.upgrReplyWait.insert(blockAddr);
+            unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, to, l1.get_llc_bank(blockAddr), true, blockAddr));
+            proc.L2Caches[upgr->to].incomingMsg.push_back(move(upgr));
+        }
         l1.getReplyWait.erase(blockAddr); // this is not a part of evict_replace, its specific to put
         l1.evict_replace(proc, blockAddr, State::S);
     }
@@ -128,6 +142,8 @@ void Put::handle(Processor &proc, bool toL1) {
 void Get::handle(Processor &proc, bool toL1) {
     if(fromL1) {
         if(!toL1) {
+            if(blockAddr == 140722109179200) {std::cout << "get sent by L1 : " << from << " to L2 at 136 : " << proc.numCycles << "\n";}
+            
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
             if(l2.directory[st].contains(blockAddr)) {
@@ -138,6 +154,7 @@ void Get::handle(Processor &proc, bool toL1) {
                 }
                 else if(dir_ent.dirty) { // M state.
                     int owner = dir_ent.ownerId;
+                    assert(owner != from);
                     unique_ptr<Message> get(new Get(MsgType::GET, from, owner, true, blockAddr)); // L2 masks itself as the requestor
                     dir_ent.pending = true;
                     dir_ent.dirty = false;
@@ -179,6 +196,8 @@ void Get::handle(Processor &proc, bool toL1) {
         }
         else {  // this is the case where L2 had earlier sent a Get to owner cacheBlock and it saw this Get as being received from requestor L1
             // Get can also be sent by L2 to L1 if L1 has block in M state.
+            if(blockAddr == 140722109179200) {std::cout << "get sent by L1 : " << from << " to L1 : " << to << " at 190 : " << proc.numCycles << "\n";}
+
             auto &l1 = proc.L1Caches[to];
             auto st = l1.set_from_addr(blockAddr);
             if(l1.check_cache(blockAddr)) {  // if in cache
@@ -209,12 +228,17 @@ void Get::handle(Processor &proc, bool toL1) {
     }
 }
 
-//update priority of blocks as much as possible who were in the pending state.
+// this also updates priority of blocks as much as possible who were in the pending state.
 void Putx::handle(Processor &proc, bool toL1) {
     if(toL1) {
+        if(blockAddr == 140722109179200) {std::cout << "putx received at 221 : " << proc.numCycles << "\n";}
+
         auto &l1 = proc.L1Caches[to];
-        assert(l1.getXReplyWait.contains(blockAddr)); // putx send in reply only to Getx
-        l1.getXReplyWait.erase(blockAddr); // got a reply!
+        assert(l1.getXReplyWait.contains(blockAddr) or // putx send in reply to Getx
+               l1.getReplyWait.contains(blockAddr)); // putx sent in reply to Get (E state)
+        
+        l1.getXReplyWait.contains(blockAddr) ? l1.getXReplyWait.erase(blockAddr) : l1.getReplyWait.erase(blockAddr);
+
         if(numAckToCollect == 0) { // no need to wait, can include block immediately.
             l1.evict_replace(proc, blockAddr, state);
         }
@@ -261,6 +285,8 @@ void Putx::handle(Processor &proc, bool toL1) {
 void Getx::handle(Processor &proc, bool toL1) {
     if(fromL1) {
         if(!toL1) { // received at LLC bank
+            if(blockAddr == 140722109179200) {std::cout << "getx sent by L1 : " << from << " to L2 at 279 : " << proc.numCycles << "\n";}
+
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
             if(l2.directory[st].contains(blockAddr)) {
@@ -271,6 +297,10 @@ void Getx::handle(Processor &proc, bool toL1) {
                 }
                 else if(dir_ent.dirty) {
                     int owner = dir_ent.ownerId;
+                    if(owner == from) {
+                        std :: cout << blockAddr << "\n";
+                    }
+                    assert(owner != from);
                     unique_ptr<Message> getx(new Getx(MsgType::GETX, from, owner, true, blockAddr)); // L2 masks itself as the requestor
                     dir_ent.ownerId = from;
                     dir_ent.pending = true;
@@ -280,13 +310,15 @@ void Getx::handle(Processor &proc, bool toL1) {
                     dir_ent.ownerId = from;
                     dir_ent.pending = true;
                     dir_ent.dirty = true;
-                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, dir_ent.bitVector.count(), State::M));
-                    proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                    int numInvToSend = 0;
                     for(int i = 0; i < dir_ent.bitVector.size(); i++) {
-                        if(!dir_ent.bitVector.test(i)) { continue; }
+                        if(!dir_ent.bitVector.test(i) or i == from) { continue; }
+                        numInvToSend++;
                         unique_ptr<Message> inv(new Inv(MsgType::INV, from, i, true, blockAddr)); // L2 masks itself as the receiver of Getx so that all inv acks are sent to it.
                         proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
                     }
+                    unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, numInvToSend, State::M));
+                    proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                 }
             }
             else if(l2.check_cache(blockAddr)) { // if present in cache but not in dir
@@ -316,6 +348,8 @@ void Getx::handle(Processor &proc, bool toL1) {
             }
         }
         else { // received at L1 cache
+            if(blockAddr == 140722109179200) {std::cout << "getx sent by L1 : " << from << " to L1 : " << to << " at 136 : " << proc.numCycles << "\n";}
+
             auto &l1 = proc.L1Caches[to];
             if(l1.check_cache(blockAddr)) {  // if in cache
                 auto st = l1.set_from_addr(blockAddr);
@@ -345,6 +379,8 @@ void Getx::handle(Processor &proc, bool toL1) {
 void Wb::handle(Processor &proc, bool toL1) {
     if(fromL1) {
         if(!toL1) { // wb sent to L2
+            if(blockAddr == 140722109179200) {std::cout << "wb sent by L1 : " << from << " to L2 at 136 : " << proc.numCycles << "\n";}
+
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
             auto &dir_ent = l2.directory[st][blockAddr];
@@ -385,6 +421,8 @@ void Wb::handle(Processor &proc, bool toL1) {
                 assert(dir_ent.dirty);
                 assert(dir_ent.ownerId == from);
                 assert(!dir_ent.toBeReplaced);
+                if(blockAddr == 140722109179200) {std::cout << "wb because getting evicted " << proc.numCycles << "\n";}
+                dir_ent.dirty = false;
                 dir_ent.bitVector.reset();
                 dir_ent.bitVector.set(from);
             }
@@ -401,6 +439,8 @@ void Wb::handle(Processor &proc, bool toL1) {
 void UpgrAck::handle(Processor &proc, bool toL1) {
     if(!fromL1) {
         if(toL1) {
+            if(blockAddr == 140722109179200) {std::cout << "upgr_ack sent by L1 : " << from << " to L1 : " << to << " at 136 : " << proc.numCycles << "\n";}
+
             auto &l1 = proc.L1Caches[to];
             assert(l1.upgrReplyWait.contains(blockAddr)); // waiting for upgrAck
             l1.upgrReplyWait.erase(blockAddr); // got the reply.
@@ -448,6 +488,7 @@ void UpgrAck::handle(Processor &proc, bool toL1) {
 void Upgr::handle(Processor &proc, bool toL1) {
     if(fromL1) {
         if(!toL1) { // to L2
+            if(blockAddr == 140722109179200) {std::cout << "upgr sent by L1 : " << from << " to L2 at 485 : " << proc.numCycles << "\n";}
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
             assert(l2.directory[st].contains(blockAddr)); // since we receive a upgr message, directory should have this entry
@@ -485,6 +526,7 @@ void Nack::handle(Processor &proc, bool toL1) {
     }
     else {
         if(toL1) {
+            if(blockAddr == 140722109179200) {std::cout << "upgr_ack sent by L2 to L1 " << to << " at 523 : " << proc.numCycles << "\n";}
             auto &l1 = proc.L1Caches[to];
             assert(!l1.outstandingNacks.contains(blockAddr));
             switch (msgType)

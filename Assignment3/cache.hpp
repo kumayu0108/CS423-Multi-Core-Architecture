@@ -88,7 +88,7 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
     inv_msg->handle(proc, TO_L1); \
     msg.reset(static_cast<Message *>(inv_msg.release()))
 
-void L1::check_nacked_requests(Processor &proc) {
+bool L1::check_nacked_requests(Processor &proc) {
     if(outstandingNacks.empty()) { return; }
     // AYUSH : should I serve only one nacked request or all nacked requests whose counter is 0? currently only serving one nack.
     ull block_id_nack_request = 0;
@@ -99,7 +99,7 @@ void L1::check_nacked_requests(Processor &proc) {
         }
         if(it.second.waitForNumCycles == 0) { issue_nacked_request = true; block_id_nack_request = it.first; }
     }
-    if(!issue_nacked_request) { return; }
+    if(!issue_nacked_request) { return false; }
     auto &nack_struct = outstandingNacks[block_id_nack_request];
     switch (nack_struct.msg)
     {
@@ -130,6 +130,7 @@ void L1::check_nacked_requests(Processor &proc) {
         }
     }
     outstandingNacks.erase(block_id_nack_request);
+    return true;
 }
 
 void L1::process_log(Processor &proc) {
@@ -200,7 +201,7 @@ void L1::process_log(Processor &proc) {
 bool L1::process(Processor &proc) {
     bool progress = false;
     read_if_reqd();
-    check_nacked_requests(proc);
+    progress |= check_nacked_requests(proc);
     if(!logs.empty() and proc.nextGlobalMsgToProcess >= logs.front().time) { // process from trace
         if(proc.nextGlobalMsgToProcess == logs.front().time) {proc.nextGlobalMsgToProcess++;}
         progress = true;

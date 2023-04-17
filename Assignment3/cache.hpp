@@ -6,7 +6,12 @@ class Processor;
 
 // this function only removes this addr from cache & returns if anything got evicted
 bool L1::evict(ull addr) {
-    if(addr == 140722109179200) {std::cout << "evicted\n";}
+#ifdef PRINT_DEBUG
+    if(addr == 140538078915072) {
+        std::cout << "evicted by L1 : " << id <<"\n";
+    }
+#endif
+    assert(!upgrReplyWait.contains(addr));
     assert(check_cache(addr));
     ull st = set_from_addr(addr);
     assert(st < cacheData.size());
@@ -74,7 +79,6 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
         unique_ptr<Message> wb(new Wb(MsgType::WB, id, l2_bank, true, evictAddr, false));
         proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
     }
-
     evict(evictAddr); // update priority and all that.
     ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
     timeBlockAdded[st].insert({nwTime, addr});
@@ -156,6 +160,12 @@ void L1::process_log(Processor &proc) {
                 cache_block.state = State::M;   // transition to M
                 update_priority(log.addr);
             }
+            else if(upgrReplyWait.contains(log.addr)) { // alreadt sent upgrade
+                // do nothing
+            }
+            else if(numAckToCollect.contains(log.addr)) { // sent upgr/putx and received replies but waiting for replies.
+                // do nothing
+            }
             else { // cache state = Shared
                 auto l2_bank_num = get_llc_bank(log.addr);
                 upgrReplyWait.insert(log.addr);
@@ -180,8 +190,11 @@ void L1::process_log(Processor &proc) {
                 // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and
                 getReplyWait[log.addr] = true;
             }
+            else if(numAckToCollect.contains(log.addr)) { // already sent and reecived upgr/getx replies but waiting for inv acks.
+                // do nothing
+            }
             else {
-                // if(log.addr == 140722109179200) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
+                // if(log.addr == 140538078915072) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getXReplyWait.insert(log.addr);
                 unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
@@ -202,7 +215,7 @@ void L1::process_log(Processor &proc) {
             else {
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getReplyWait[log.addr] = false;
-                // if(log.addr == 140722109179200) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
+                // if(log.addr == 140538078915072) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
                 unique_ptr<Message> get(new Get(MsgType::GET, id, l2_bank_num, true, log.addr));
                 proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(get));
             }

@@ -17,6 +17,16 @@
 // #define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
 #include <assert.h>
 
+#ifndef NDEBUG
+#define ASSERT2(expr, print) \
+    if(!expr) { print; } \
+    assert(expr);
+#define ASSERT(expr) assert(expr)
+#else
+#define ASSERT2(expr, print)
+#define ASSERT(expr) 
+#endif
+
 
 using std::set, std::unordered_map, std::vector, std::deque, std::bitset, std::map, std::unordered_set, std::pair;
 using std::unique_ptr, std::make_unique, std::move;
@@ -199,7 +209,7 @@ class Putx: public Message {
         Putx() : Message() {}
         Putx(Putx&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)), numAckToCollect(move(other.numAckToCollect)),
             state(move(other.state)) {}
-        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numAckToCollect, State state = State::M) :
+        Putx(MsgType msgType, int from, int to, bool fromL1, ull blockId, int numAckToCollect, State state) :
         Message(msgType, from, to, fromL1), blockAddr(blockId), numAckToCollect(numAckToCollect), state(state) {}
 };
 

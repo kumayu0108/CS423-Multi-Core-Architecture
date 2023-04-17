@@ -13,6 +13,7 @@
 #include <memory>
 #include <limits>
 
+#define PRINT_DEBUG
 // #define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
 #include <assert.h>
 

@@ -41,19 +41,24 @@ void Cache::update_priority(ull addr) { // this function updates the priority of
     ull st = set_from_addr(addr);
     assert(st < cacheData.size() && cacheData[st].contains(addr));
     ull time = cacheData[st][addr].time;
+    assert(timeBlockAdded[st].contains({time, addr}));
     timeBlockAdded[st].erase({time, addr});
     ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
     timeBlockAdded[st].insert({nwTime, addr});
     cacheData[st][addr].time = nwTime;
 }
 
-// This function should not assign any cache state to the block, since the state could either be M, S or E.
+// This function assigns state that is passed to the block.
 cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
-
+    assert(state != State::I);
     auto st = set_from_addr(addr);
     auto &l1 = proc.L1Caches[id];
     auto &cacheData = l1.cacheData;
     auto &timeBlockAdded = l1.timeBlockAdded;
+
+    if(check_cache(addr)) {
+        evict(addr);
+    }
 
     if(cacheData[st].size() < NUM_L1_WAYS) { // no need to evict, need to create new cache block
         ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
@@ -64,16 +69,18 @@ cacheBlock L1::evict_replace(Processor &proc, ull addr, State state) {
         return {0, State::I}; // need not evict, return default value;
     }
 
-    auto [evictAddrTime, evictAddr] = *timeBlockAdded[st].rbegin(); // initalise actual value to max time.
+    ull evictAddr;
+    bool flag = false;
     for(auto it : timeBlockAdded[st]) {
         // only need to check upgrReply because its the only case where block can be pending and in the cache.(both upgrAck and Acks havnt arrived)
         // Need to check numAckToCollect too because there can be case that upgrReply has arrived but Acks havent.
         if(numAckToCollect.contains(it.second) or upgrReplyWait.contains(it.second)) continue;
-        if(it.first < evictAddrTime) {evictAddr = it.second, evictAddrTime = it.first; break;}
+        evictAddr = it.second; flag = true;
+        break;
     }
     // if this is true, evictAddrTime hasnt been updated. means, all blocks in set are waiting for Acks. Need to handle this.
-    if(evictAddrTime == timeBlockAdded[st].rbegin()->first) { assert(false); }
-
+    if(!flag) { assert(false); }
+    assert(cacheData[st].contains(evictAddr));
     if(cacheData[st][evictAddr].state == State::M or cacheData[st][evictAddr].state == State::E) {
         int l2_bank = get_llc_bank(evictAddr); // get LLc bank.
         unique_ptr<Message> wb(new Wb(MsgType::WB, id, l2_bank, true, evictAddr, false));
@@ -299,6 +306,10 @@ bool L1::process(Processor &proc) {
 }
 
 bool L1::check_cache(ull addr) {
+    if(!((!cacheData[set_from_addr(addr)].contains(addr)) or
+            (cacheData[set_from_addr(addr)].contains(addr) and cacheData[set_from_addr(addr)][addr].state != State::I))) {
+                std::cout << addr <<"\n";
+            }
     assert((!cacheData[set_from_addr(addr)].contains(addr)) or
             (cacheData[set_from_addr(addr)].contains(addr) and cacheData[set_from_addr(addr)][addr].state != State::I));
     return cacheData[set_from_addr(addr)].contains(addr);
@@ -374,7 +385,7 @@ bool LLCBank::process(Processor &proc) {
 }
 
 // not reqd as of now, + insane design overhead.
-cacheBlock LLCBank::evict_replace(Processor& proc, ull addr, State state) { return {0, State::I}; }
+cacheBlock LLCBank::evict_replace(Processor& proc, ull addr, State state) { assert(false); return {0, State::I}; }
 
 bool LLCBank::evict(ull addr) {
     assert(check_cache(addr));

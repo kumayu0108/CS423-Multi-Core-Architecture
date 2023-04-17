@@ -7,11 +7,11 @@ class Processor;
 // this function only removes this addr from cache & returns if anything got evicted
 bool L1::evict(ull addr) {
 #ifdef PRINT_DEBUG
-    if(addr == 140538078915072) {
+    if(addr == 140538153542400) {
         std::cout << "evicted by L1 : " << id <<"\n";
     }
 #endif
-    assert(!upgrReplyWait.contains(addr));
+    // assert(!upgrReplyWait.contains(addr));  // This assert doesn't hold as block may receive an inv req, if race happens between upgr and upgr/getx from another block
     assert(check_cache(addr));
     ull st = set_from_addr(addr);
     assert(st < cacheData.size());
@@ -121,26 +121,56 @@ bool L1::check_nacked_requests(Processor &proc) {
         case MsgType::GET: {
             assert(getReplyWait.contains(block_id_nack_request));
             unique_ptr<Message> get(new Get(MsgType::GET, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
-            proc.L1Caches[get->to].incomingMsg.push_back(move(get));
+            proc.L2Caches[get->to].incomingMsg.push_back(move(get));
             break;
         }
 
-        case MsgType::GETX: {
-            assert(getXReplyWait.contains(block_id_nack_request));
-            unique_ptr<Message> getx(new Getx(MsgType::GETX, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
-            proc.L1Caches[getx->to].incomingMsg.push_back(move(getx));
-            break;
-        }
+        // case MsgType::GETX: {
+        //     assert(getXReplyWait.contains(block_id_nack_request));
+        //     unique_ptr<Message> getx(new Getx(MsgType::GETX, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+        //     proc.L2Caches[getx->to].incomingMsg.push_back(move(getx));
+        //     break;
+        // }
 
-        case MsgType::UPGR: {
-            assert(upgrReplyWait.contains(block_id_nack_request));
-            unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
-            proc.L1Caches[upgr->to].incomingMsg.push_back(move(upgr));
-            break;
-        }
+        // case MsgType::UPGR: {
+        //     // assert(upgrReplyWait.contains(block_id_nack_request)); // this won't hold as I'm removing block from upgrReplyWait when it gets nacked.
+        //     unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+        //     proc.L2Caches[upgr->to].incomingMsg.push_back(move(upgr));
+        //     break;
+        // }
 
         default:{
-            assert(false); // only these three types of nacks possible
+            assert(nack_struct.msg == MsgType::GETX or nack_struct.msg == MsgType::UPGR);
+            auto st = set_from_addr(block_id_nack_request);
+            if(check_cache(block_id_nack_request)) { // if in cache, check state
+                if(cacheData[st][block_id_nack_request].state == State::E or cacheData[st][block_id_nack_request].state == State::M) { // no need to send any message
+                    // do nothing
+                }
+                else if(upgrReplyWait.contains(block_id_nack_request)) { // already sent an Upgrade
+                    // do nothing
+                }
+                else  {
+                    assert(cacheData[st][block_id_nack_request].state != State::I);
+                    unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+                    proc.L2Caches[upgr->to].incomingMsg.push_back(move(upgr));
+                }
+            }
+            else {  // if not in cache send Getx 
+                if(getReplyWait.contains(block_id_nack_request)) {  // if sent a Get
+                    assert(!getXReplyWait.contains(block_id_nack_request));
+                    getReplyWait[block_id_nack_request] = true; // send an upgrade when get returns
+                }
+                else if(upgrReplyWait.contains(block_id_nack_request)) { // situation when we have sent an upgrade, but received inv due to race between upgr and upgr/getx of other L1. This upgr would be nacked, and retried in the future.
+                    // do nothing
+                }
+                else if(getXReplyWait.contains(block_id_nack_request)) { // already sent a Getx
+                    // do nothing
+                }
+                else {
+                    unique_ptr<Message> getx(new Getx(MsgType::GETX, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+                    proc.L2Caches[getx->to].incomingMsg.push_back(move(getx));
+                }
+            }
             break;
         }
     }
@@ -152,6 +182,10 @@ void L1::process_log(Processor &proc) {
     auto log = logs.front();
     logs.pop_front();
     if(check_cache(log.addr)) { // also update priority except for the case of upgr.
+        if(outstandingNacks.contains(log.addr) and outstandingNacks[log.addr].msg == MsgType::GET) { // if we were waiting to send Get earlier, but now for some reason have the block in cache, we can remove this nacked request.
+            outstandingNacks.erase(log.addr);
+        }
+
         if(log.isStore) { // write
             auto &cache_block = cacheData[set_from_addr(log.addr)][log.addr];
             if(cache_block.state == State::M) {
@@ -160,10 +194,16 @@ void L1::process_log(Processor &proc) {
                     std :: cout << log.addr << "\n";
                 }
                 assert(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
+                if(outstandingNacks.contains(log.addr)) { // if we were waiting to send GetX/Upgr earlier, but now for some reason have the block in cache, we can remove this nacked request.
+                    outstandingNacks.erase(log.addr);
+                }
                 update_priority(log.addr);
             }
             else if(cache_block.state == State::E) {
                 assert(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
+                if(outstandingNacks.contains(log.addr)) { // if we were waiting to send GetX/Upgr earlier, but now for some reason have the block in cache, we can remove this nacked request.
+                    outstandingNacks.erase(log.addr);
+                }
                 cache_block.state = State::M;   // transition to M
                 update_priority(log.addr);
             }
@@ -172,6 +212,9 @@ void L1::process_log(Processor &proc) {
             }
             else if(numAckToCollect.contains(log.addr)) { // sent upgr/putx and received replies but waiting for replies.
                 // do nothing
+            }
+            else if(outstandingNacks.contains(log.addr)) {
+                // were waiting to send either upgr or getx earlier, so wait until nack counter is 0.
             }
             else { // cache state = Shared
                 auto l2_bank_num = get_llc_bank(log.addr);
@@ -194,14 +237,21 @@ void L1::process_log(Processor &proc) {
                 assert(false);
             }
             else if(getReplyWait.contains(log.addr)){
-                // AYUSH : do we send a upgr if we have sent a Get request???, but if we send a upgr and
                 getReplyWait[log.addr] = true;
             }
             else if(numAckToCollect.contains(log.addr)) { // already sent and reecived upgr/getx replies but waiting for inv acks.
                 // do nothing
             }
+            else if(outstandingNacks.contains(log.addr)) { // if we were waiting for an upgrade or a getx to be sent, meaning we earlier wanted a write permission for the block, so we won't send a getx now, but would send it when nack counter is 0.
+                if(outstandingNacks[log.addr].msg == MsgType::GETX or outstandingNacks[log.addr].msg == MsgType::UPGR) { // were waiting for upgr or getx
+                    // do nothing
+                }
+                else {  // were waiting for get
+                    outstandingNacks[log.addr].msg = MsgType::GETX; // would send a getx now, after nacked timer is over.
+                }
+            }
             else {
-                // if(log.addr == 140538078915072) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
+                // if(log.addr == 140538153542400) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getXReplyWait.insert(log.addr);
                 unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
@@ -219,10 +269,13 @@ void L1::process_log(Processor &proc) {
                 // AYUSH : what to do? send Getx?
                 assert(false);
             }
+            else if(outstandingNacks.contains(log.addr)) { // if waiting for either Get/GetX/Upgr do nothing and send request after timer is over.
+                // do nothing
+            }
             else {
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getReplyWait[log.addr] = false;
-                // if(log.addr == 140538078915072) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
+                // if(log.addr == 140538153542400) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
                 unique_ptr<Message> get(new Get(MsgType::GET, id, l2_bank_num, true, log.addr));
                 proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(get));
             }

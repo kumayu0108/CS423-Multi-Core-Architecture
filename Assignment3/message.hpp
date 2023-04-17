@@ -13,6 +13,7 @@ void Inv::handle(Processor &proc, bool toL1) {
         l1.evict(blockAddr);
     }
     if(fromL1) {    // if the message is sent by L1, it means it is because someone requested S/I -> M
+        assert(from != to);
         assert(toL1); // any invalidations sent by L1 would be sent to L1
         // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
         unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, blockAddr));
@@ -115,7 +116,7 @@ void Put::handle(Processor &proc, bool toL1) {
     if(toL1) {
         // L1 is the only receiver, gets data as a block. Now need to place it somewhere.
 #ifdef PRINT_DEBUG
-        if(blockAddr == 140538078915072) {
+        if(blockAddr == 140538153542400) {
             if(fromL1)
                 std::cout << "put sent by L1 : " << from << " to L1 : " << to << " at 117 : " << proc.numCycles << "\n";
             else 
@@ -129,7 +130,7 @@ void Put::handle(Processor &proc, bool toL1) {
         if(l1.getReplyWait[blockAddr]) { // meaning there was atleast a store miss.
             l1.upgrReplyWait.insert(blockAddr);
 #ifdef PRINT_DEBUG
-        if(blockAddr == 140538078915072) {
+        if(blockAddr == 140538153542400) {
             std::cout << "upgr sent due to put at 133 : " << proc.numCycles << "\n";
         }
 #endif
@@ -149,7 +150,7 @@ void Get::handle(Processor &proc, bool toL1) {
     if(fromL1) {
         if(!toL1) {
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {std::cout << "get sent by L1 : " << from << " to L2 at 136 : " << proc.numCycles << "\n";}
+            if(blockAddr == 140538153542400) {std::cout << "get sent by L1 : " << from << " to L2 at 136 : " << proc.numCycles << "\n";}
 #endif            
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
@@ -204,7 +205,7 @@ void Get::handle(Processor &proc, bool toL1) {
         else {  // this is the case where L2 had earlier sent a Get to owner cacheBlock and it saw this Get as being received from requestor L1
             // Get can also be sent by L2 to L1 if L1 has block in M state.
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {std::cout << "get sent by L1 : " << from << " to L1 : " << to << " at 190 : " << proc.numCycles << "\n";}
+            if(blockAddr == 140538153542400) {std::cout << "get sent by L1 : " << from << " to L1 : " << to << " at 190 : " << proc.numCycles << "\n";}
 #endif
             auto &l1 = proc.L1Caches[to];
             auto st = l1.set_from_addr(blockAddr);
@@ -240,7 +241,7 @@ void Get::handle(Processor &proc, bool toL1) {
 void Putx::handle(Processor &proc, bool toL1) {
     if(toL1) {
 #ifdef PRINT_DEBUG
-        if(blockAddr == 140538078915072) {std::cout << "putx received at 221 : " << proc.numCycles << "\n";}
+        if(blockAddr == 140538153542400) {std::cout << "putx received at 221 : " << proc.numCycles << "\n";}
 #endif
 
         auto &l1 = proc.L1Caches[to];
@@ -297,7 +298,7 @@ void Getx::handle(Processor &proc, bool toL1) {
     if(fromL1) {
         if(!toL1) { // received at LLC bank
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {std::cout << "getx sent by L1 : " << from << " to L2 at 279 : " << proc.numCycles << "\n";}
+            if(blockAddr == 140538153542400) {std::cout << "getx sent by L1 : " << from << " to L2 at 279 : " << proc.numCycles << "\n";}
 #endif
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
@@ -361,7 +362,7 @@ void Getx::handle(Processor &proc, bool toL1) {
         }
         else { // received at L1 cache
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {std::cout << "getx sent by L1 : " << from << " to L1 : " << to << " at 136 : " << proc.numCycles << "\n";}
+            if(blockAddr == 140538153542400) {std::cout << "getx sent by L1 : " << from << " to L1 : " << to << " at 136 : " << proc.numCycles << "\n";}
 #endif
             auto &l1 = proc.L1Caches[to];
             if(l1.check_cache(blockAddr)) {  // if in cache
@@ -393,7 +394,7 @@ void Wb::handle(Processor &proc, bool toL1) {
     if(fromL1) {
         if(!toL1) { // wb sent to L2
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {std::cout << "wb sent by L1 : " << from << " to L2 at 136 : " << proc.numCycles << "\n";}
+            if(blockAddr == 140538153542400) {std::cout << "wb sent by L1 : " << from << " to L2 at 136 : " << proc.numCycles << "\n";}
 #endif
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
@@ -437,7 +438,7 @@ void Wb::handle(Processor &proc, bool toL1) {
                 assert(dir_ent.ownerId == from);
                 assert(!dir_ent.toBeReplaced);
 #ifdef PRINT_DEBUG
-                if(blockAddr == 140538078915072) {std::cout << "wb because getting evicted " << proc.numCycles << "\n";}
+                if(blockAddr == 140538153542400) {std::cout << "wb because getting evicted " << proc.numCycles << "\n";}
 #endif
                 // since block gets evicted, i think we should erase entry from directory
                 l2.directory[st].erase(blockAddr);
@@ -459,7 +460,7 @@ void UpgrAck::handle(Processor &proc, bool toL1) {
     if(!fromL1) {
         if(toL1) {
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {std::cout << "upgr_ack sent by L2 to L1 : " << to << " at 136 : " << proc.numCycles << "\n";}
+            if(blockAddr == 140538153542400) {std::cout << "upgr_ack sent by L2 to L1 : " << to << " at 136 : " << proc.numCycles << "\n";}
 #endif
             auto &l1 = proc.L1Caches[to];
             assert(l1.upgrReplyWait.contains(blockAddr)); // waiting for upgrAck
@@ -512,7 +513,7 @@ void Upgr::handle(Processor &proc, bool toL1) {
             auto st = l2.set_from_addr(blockAddr);
             assert(l2.directory[st].contains(blockAddr)); // since we receive a upgr message, directory should have this entry
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {
+            if(blockAddr == 140538153542400) {
                 std::cout << "upgr sent by L1 : " << from << " to L2 at 485 : " << proc.numCycles << " bitvec:" << l2.directory[st][blockAddr].bitVector << "\n";
             }
 #endif
@@ -560,7 +561,7 @@ void Nack::handle(Processor &proc, bool toL1) {
     else {
         if(toL1) {
 #ifdef PRINT_DEBUG
-            if(blockAddr == 140538078915072) {std::cout << "upgr_ack sent by L2 to L1 " << to << " at 523 : " << proc.numCycles << "\n";}
+            if(blockAddr == 140538153542400) {std::cout << "upgr_ack sent by L2 to L1 " << to << " at 523 : " << proc.numCycles << "\n";}
 #endif
             auto &l1 = proc.L1Caches[to];
             assert(!l1.outstandingNacks.contains(blockAddr));
@@ -580,6 +581,7 @@ void Nack::handle(Processor &proc, bool toL1) {
 
                 case MsgType::UPGR: {
                     assert(l1.upgrReplyWait.contains(blockAddr));
+                    l1.upgrReplyWait.erase(blockAddr);
                     l1.outstandingNacks[blockAddr].msg = MsgType::UPGR;
                     break;
                 }

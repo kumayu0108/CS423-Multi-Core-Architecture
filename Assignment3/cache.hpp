@@ -489,8 +489,8 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
     // Need to check if this has been called before and address to be evicted is also being evicted before. (waiting for inv acks)
     auto it = timeBlockAdded[st].begin();
     for( ; it != timeBlockAdded[st].end(); it++) {
-        if(directory[st][it->second].pending) {continue;}
         if(numInvAcksToCollectForIncl.contains(it->second)) {continue;}
+        if(directory[st].contains(it->second) and directory[st][it->second].pending) {continue;}
         break;
     }
     if (it == timeBlockAdded[st].end()) {
@@ -507,8 +507,10 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
         ASSERT(check_cache(blockAddr_to_be_replaced));
         directory[st].erase(blockAddr_to_be_replaced);
         evict(blockAddr_to_be_replaced);
+        directory[st].emplace(addr, DirEnt(false, -1));
         directory[st][addr].dirty = true;
         directory[st][addr].ownerId = L1CacheNum;
+        // adding to L2 Cache Data
         ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
         timeBlockAdded[st].insert({nwTime, addr});
         cacheData[st][addr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2

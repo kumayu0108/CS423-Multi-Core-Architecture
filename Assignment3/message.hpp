@@ -5,22 +5,31 @@
 //     return ((blockAddr == other.blockAddr) ? msg < other.msg : blockAddr < other.blockAddr);
 // }
 
-
+// It could happen that we receive inv requests for a block which is waiting for upgr, if upgr request races with another upgr/getx or if L2 sends inv for inclusive purpose.
 void Inv::handle(Processor &proc, bool toL1) {
     auto &l1 = proc.L1Caches[to];
     // evict from L1
-    if(l1.check_cache(blockAddr)){
-        l1.evict(blockAddr);
-    }
+    // if(l1.check_cache(blockAddr)){
+    //     l1.evict(blockAddr);
+    // }
     if(fromL1) {    // if the message is sent by L1, it means it is because someone requested S/I -> M
         ASSERT(from != to);
         ASSERT(toL1); // any invalidations sent by L1 would be sent to L1
-        // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
-        unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, blockAddr));
-        proc.L1Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
+        auto st = l1.set_from_addr(blockAddr);
+        if(l1.check_cache(blockAddr) and (l1.cacheData[st][blockAddr].state == State::E or l1.cacheData[st][blockAddr].state == State::M)) {
+            ASSERT(false);
+        }
+        else {
+            // generate the inv ack message to be sent to the 'from' L1 cache as directory informs cache about the receiver of ack in this way.
+            unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, blockAddr));
+            proc.L1Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
+        }
+        if(l1.check_cache(blockAddr)) {
+            l1.evict(blockAddr);
+        }
     }
     else {
-        ASSERT(!l1.upgrReplyWait.contains(blockAddr));
+        // ASSERT(!l1.upgrReplyWait.contains(blockAddr));
         // generate inv ack to be sent to 'from' LLC; for inclusive purpose.
         auto st = l1.set_from_addr(blockAddr);
         if(l1.check_cache(blockAddr) and (l1.cacheData[st][blockAddr].state == State::M or l1.cacheData[st][blockAddr].state == State::E)) { // send writeback if cachestate in M or E
@@ -30,6 +39,9 @@ void Inv::handle(Processor &proc, bool toL1) {
         else {
             unique_ptr<Message> inv_ack(new InvAck(MsgType::INV_ACK, to, from, true, blockAddr));
             proc.L2Caches[inv_ack->to].incomingMsg.push_back(move(inv_ack));
+        }
+        if(l1.check_cache(blockAddr)) {
+            l1.evict(blockAddr);
         }
     }
 }

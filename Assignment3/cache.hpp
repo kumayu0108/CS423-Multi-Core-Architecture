@@ -195,6 +195,7 @@ bool L1::check_nacked_requests(Processor &proc) {
 }
 
 void L1::process_log(Processor &proc) {
+    proc.totL1Accesses++;
     auto log = logs.front();
     logs.pop_front();
     if(check_cache(log.addr)) { // also update priority except for the case of upgr.
@@ -224,15 +225,17 @@ void L1::process_log(Processor &proc) {
                 update_priority(log.addr);
             }
             else if(upgrReplyWait.contains(log.addr)) { // alreadt sent upgrade
-                // do nothing
+                proc.totL1UpgrMisses++;
             }
             else if(numAckToCollect.contains(log.addr)) { // sent upgr/putx and received replies but waiting for replies.
-                // do nothing
+                proc.totL1UpgrMisses++;
             }
             else if(outstandingNacks.contains(log.addr)) {
                 // were waiting to send either upgr or getx earlier, so wait until nack counter is 0.
+                proc.totL1UpgrMisses++;
             }
             else { // cache state = Shared
+                proc.totL1UpgrMisses++;
                 auto l2_bank_num = get_llc_bank(log.addr);
                 upgrReplyWait.insert(log.addr);
                 unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, l2_bank_num, true, log.addr));
@@ -244,6 +247,7 @@ void L1::process_log(Processor &proc) {
         }
     }
     else {
+        proc.totL1Misses++;
         if(log.isStore) {
             if(getXReplyWait.contains(log.addr)) {
                 // do nothing, already sent a Getx
@@ -374,12 +378,8 @@ bool L1::process(Processor &proc) {
 }
 
 bool L1::check_cache(ull addr) {
-    if(!((!cacheData[set_from_addr(addr)].contains(addr)) or
-            (cacheData[set_from_addr(addr)].contains(addr) and cacheData[set_from_addr(addr)][addr].state != State::I))) {
-                std::cout << addr <<"\n";
-            }
-    ASSERT((!cacheData[set_from_addr(addr)].contains(addr)) or
-            (cacheData[set_from_addr(addr)].contains(addr) and cacheData[set_from_addr(addr)][addr].state != State::I));
+    ASSERT2((!cacheData[set_from_addr(addr)].contains(addr)) or
+            (cacheData[set_from_addr(addr)].contains(addr) and cacheData[set_from_addr(addr)][addr].state != State::I), std::cout << addr <<"\n");
     return cacheData[set_from_addr(addr)].contains(addr);
 }
 
@@ -500,6 +500,22 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
         ASSERT(false);
     }
     auto [time, blockAddr_to_be_replaced] = *it;
+
+    if((!directory[st].contains(blockAddr_to_be_replaced)) or 
+       (!directory[st][blockAddr_to_be_replaced].dirty and !directory[st][blockAddr_to_be_replaced].bitVector.any())) { // what if there are no sharers to block
+        // Since block was not in directory, we can remove it directly and send a Putx reply since cache should be in M/E state in L1.
+        ASSERT(check_cache(blockAddr_to_be_replaced));
+        directory[st].erase(blockAddr_to_be_replaced);
+        evict(blockAddr_to_be_replaced);
+        directory[st][addr].dirty = true;
+        directory[st][addr].ownerId = L1CacheNum;
+        ull nwTime = (timeBlockAdded[st].empty() ? 1 : (*timeBlockAdded[st].rbegin()).first + 1);
+        timeBlockAdded[st].insert({nwTime, addr});
+        cacheData[st][addr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
+        unique_ptr<Message> putx(new Putx(MsgType::PUTX, id, L1CacheNum, false, addr, 0, (Getx ? State::M : State::E)));
+        proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+        return;
+    }
     // AYUSH : would this cause any issue?
     directory[st][blockAddr_to_be_replaced].pending = true;
     directory[st][blockAddr_to_be_replaced].toBeReplaced = true;
@@ -510,6 +526,7 @@ void LLCBank::bring_from_mem_and_send_inv(Processor &proc, ull addr, int L1Cache
         inv_ack_struct.blockAddr = addr;
         inv_ack_struct.L1CacheNums.insert({L1CacheNum, Getx});
         unique_ptr<Message> inv(new Inv(MsgType::INV, id, owner, false, blockAddr_to_be_replaced));
+        ASSERT2((inv->to) < proc.L1Caches.size() and (inv->to) >= 0, std :: cerr << (inv->to) << "\n");
         proc.L1Caches[inv->to].incomingMsg.push_back(move(inv));
     }
     else {
@@ -539,4 +556,8 @@ void Processor::run() {
         if(!progressMade) {break;}
     }
     std::cout << "Number Of Cycles : " << numCycles << "\n";
+    std::cout << "Number Of L1 Accesses : " << totL1Accesses << "\n";
+    std::cout << "Number Of L1 Misses : " << totL1Misses << "\n";
+    std::cout << "Number Of Upgrade misses : " << totL1UpgrMisses << "\n";
+    std::cout << "Number Of L2 Misses : " << totL2Misses << "\n";    
 }

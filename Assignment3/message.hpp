@@ -77,16 +77,27 @@ void InvAck::handle(Processor &proc, bool toL1) {
             ASSERT(l2.numInvAcksToCollectForIncl.contains(blockAddr));
             auto &inv_ack_struct = l2.numInvAcksToCollectForIncl[blockAddr];
             ASSERT(inv_ack_struct.waitForNumMessages > 0);
+            ASSERT(l2.check_cache(blockAddr));
             inv_ack_struct.waitForNumMessages--;
             if(inv_ack_struct.waitForNumMessages == 0) {  // all inv acks received
                 auto st = l2.set_from_addr(inv_ack_struct.blockAddr);
                 ASSERT(st == l2.set_from_addr(blockAddr)); // since we replaced this to accomodate inv_ack_struct.blockAddr, so they must be from same set.
+                ASSERT(!l2.check_cache(inv_ack_struct.blockAddr));
                 l2.directory[st].erase(blockAddr);
+                l2.evict(blockAddr);
+                // l2.cacheData[st][inv_ack_struct]
                 if(inv_ack_struct.L1CacheNums.begin()->second) { // Getx request
                     ASSERT(inv_ack_struct.L1CacheNums.size() == 1); // only 1 Getx can be served
                     int l1_ind_to_send = inv_ack_struct.L1CacheNums.begin()->first;
                     l2.directory[st][inv_ack_struct.blockAddr].dirty = true;
                     l2.directory[st][inv_ack_struct.blockAddr].ownerId = l1_ind_to_send;
+                    auto &dir_ent = l2.directory[st][inv_ack_struct.blockAddr];
+                    ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
+                    ASSERT(l2.cacheData[st].size() < NUM_L2_WAYS);
+                    // add to cache.
+                    ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
+                    l2.timeBlockAdded[st].insert({nwTime, blockAddr});
+                    l2.cacheData[st][blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
                     unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_ind_to_send, false, inv_ack_struct.blockAddr, 0, State::M));
                     proc.L1Caches[l1_ind_to_send].incomingMsg.push_back(move(putx));
                 }
@@ -97,6 +108,11 @@ void InvAck::handle(Processor &proc, bool toL1) {
                         unique_ptr<Message> put(new Put(MsgType::PUT, to, l1_ind_to_send, false, inv_ack_struct.blockAddr, "inv ack sent this for inclus. after collecting all wb"));
                         proc.L1Caches[l1_ind_to_send].incomingMsg.push_back(move(put));
                     }
+                    ASSERT(l2.cacheData[st].size() < NUM_L2_WAYS);
+                    // add to cache.
+                    ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
+                    l2.timeBlockAdded[st].insert({nwTime, blockAddr});
+                    l2.cacheData[st][blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
                 }
                 l2.numInvAcksToCollectForIncl.erase(blockAddr);
             }
@@ -157,6 +173,7 @@ void Get::handle(Processor &proc, bool toL1) {
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
             if(l2.directory[st].contains(blockAddr)) {
+                ASSERT(l2.check_cache(blockAddr));
                 auto &dir_ent = l2.directory[st][blockAddr];
                 if(dir_ent.pending) {
                     unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::GET, to, from, false, blockAddr));
@@ -186,22 +203,31 @@ void Get::handle(Processor &proc, bool toL1) {
                 unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));
                 dir_ent.ownerId = from;
                 dir_ent.dirty = true;   // since this is the E state
+                ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                 dir_ent.pending = false;
                 dir_ent.bitVector.reset();
                 proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
             }
             else {
+                proc.totL2Misses++;
                 // TODO: evict, replace and update directory state. (done)
                 auto &dir_ent = l2.directory[st][blockAddr];
                 if(l2.cacheData[st].size() < NUM_L2_WAYS) { // no need to send invalidations
+                    // add to cache.
+                    ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
+                    l2.timeBlockAdded[st].insert({nwTime, blockAddr});
+                    l2.cacheData[st][blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
+
                     unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));   // Putx to let the L1 cache know that it needs to put cache in E state
                     dir_ent.ownerId = from;
                     dir_ent.dirty = true;   // since this is the E state
+                    ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                     dir_ent.pending = false;
                     dir_ent.bitVector.reset();
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                 }
                 else {
+                    ASSERT(from != -1);
                     l2.bring_from_mem_and_send_inv(proc, blockAddr, from, false);
                 }
             }
@@ -312,6 +338,7 @@ void Getx::handle(Processor &proc, bool toL1) {
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
             if(l2.directory[st].contains(blockAddr)) {
+                ASSERT(l2.check_cache(blockAddr));
                 auto &dir_ent = l2.directory[st][blockAddr];
                 if(dir_ent.pending) {
                     unique_ptr<Message> nack(new Nack(MsgType::NACK, MsgType::GETX, to, from, false, blockAddr));
@@ -322,6 +349,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                     ASSERT2(owner != from, std :: cout << blockAddr << "\n");
                     unique_ptr<Message> getx(new Getx(MsgType::GETX, from, owner, true, blockAddr)); // L2 masks itself as the requestor
                     dir_ent.ownerId = from;
+                    ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                     dir_ent.pending = true;
                     dir_ent.debug_string = "GetX from (dir dirty) L1:" + std::to_string(from) + " set pending true ";
                     proc.L1Caches[getx->to].incomingMsg.push_back(move(getx));
@@ -330,6 +358,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                     dir_ent.ownerId = from;
                     // dir_ent.debug_string = "GetX from (dir shared) L1:" + std::to_string(from) + " set pending true ";
                     dir_ent.dirty = true;
+                    ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                     int numInvToSend = 0;
                     for(int i = 0; i < dir_ent.bitVector.size(); i++) {
                         if(!dir_ent.bitVector.test(i) or i == from) { continue; }
@@ -349,16 +378,24 @@ void Getx::handle(Processor &proc, bool toL1) {
                 unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));
                 dir_ent.dirty = true;
                 dir_ent.ownerId = from;
+                ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                 dir_ent.pending = false;
                 dir_ent.bitVector.reset();
                 proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
             }
             else {
+                proc.totL2Misses++;
                 auto &dir_ent = l2.directory[st][blockAddr];
                 if(l2.cacheData[st].size() < NUM_L2_WAYS) { // no need to send invalidations
+                    // add to cache.
+                    ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
+                    l2.timeBlockAdded[st].insert({nwTime, blockAddr});
+                    l2.cacheData[st][blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
+
                     unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));
                     dir_ent.dirty = true;
                     dir_ent.ownerId = from;
+                    ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                     dir_ent.pending = false;
                     dir_ent.bitVector.reset();
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
@@ -443,6 +480,7 @@ void Wb::handle(Processor &proc, bool toL1) {
                     int l1_cache_num = (inv_ack_struct.L1CacheNums.begin()->first);
                     l2.directory[st][inv_ack_struct.blockAddr].ownerId = l1_cache_num;
                     l2.directory[st][inv_ack_struct.blockAddr].dirty = true;
+                    ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                     l2.directory[st][inv_ack_struct.blockAddr].bitVector.reset();
                     l2.directory[st][inv_ack_struct.blockAddr].pending = false;
                     l2.directory[st][inv_ack_struct.blockAddr].toBeReplaced = false;
@@ -530,6 +568,7 @@ void Upgr::handle(Processor &proc, bool toL1) {
             auto &l2 = proc.L2Caches[to];
             auto st = l2.set_from_addr(blockAddr);
             ASSERT(l2.directory[st].contains(blockAddr)); // since we receive a upgr message, directory should have this entry
+            ASSERT(l2.check_cache(blockAddr));
 #ifdef PRINT_DEBUG
             if(blockAddr == 140538015869376 && proc.numCycles > 98183206) {
                 std::cout << "upgr sent by L1 : " << from << " to L2 at 485 : " << proc.numCycles << " bitvec:" << l2.directory[st][blockAddr].bitVector << "\n";
@@ -549,8 +588,7 @@ void Upgr::handle(Processor &proc, bool toL1) {
                 proc.L1Caches[nack->to].incomingMsg.push_back(move(nack));
             }
             else {
-                if(!proc.L1Caches[from].upgrReplyWait.contains(blockAddr)) {std::cout << blockAddr << "\n";}
-                ASSERT(proc.L1Caches[from].upgrReplyWait.contains(blockAddr));
+                ASSERT2(proc.L1Caches[from].upgrReplyWait.contains(blockAddr), std::cout << blockAddr << "\n");
                 ASSERT(dir_ent.bitVector.test(from));
                 unique_ptr<Message> upgr_ack(new UpgrAck(MsgType::UPGR_ACK, to, from, false, blockAddr, dir_ent.bitVector.count() - 1));
                 proc.L1Caches[upgr_ack->to].incomingMsg.push_back(move(upgr_ack));
@@ -562,6 +600,7 @@ void Upgr::handle(Processor &proc, bool toL1) {
                 }
                 dir_ent.dirty = true;
                 dir_ent.ownerId = from;
+                ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
             }
         }
         else {  // should not happen as L2 won't forward an Upgr request

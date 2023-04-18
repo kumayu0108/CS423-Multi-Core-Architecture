@@ -13,13 +13,13 @@
 #include <memory>
 #include <limits>
 
-#define PRINT_DEBUG
+// #define PRINT_DEBUG
 // #define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
 #include <assert.h>
 
 #ifndef NDEBUG
 #define ASSERT2(expr, print) \
-    if(!expr) { print; } \
+    if(!(expr)) { print; } \
     assert(expr);
 #define ASSERT(expr) assert(expr)
 #else
@@ -81,7 +81,7 @@ struct DirEnt {
     bool toBeReplaced; // needed for inclusive eviction
     std::string debug_string;
 
-    DirEnt(): dirty(true), ownerId(-1), pending(false), toBeReplaced(false), debug_string("") { bitVector.reset(); };
+    DirEnt(): dirty(false), ownerId(-1), pending(false), toBeReplaced(false), debug_string("") { bitVector.reset(); };
     DirEnt(DirEnt&& other) noexcept: dirty(move(other.dirty)),
         bitVector(move(other.bitVector)),
         ownerId(move(other.ownerId)),
@@ -413,12 +413,17 @@ class Processor {
         friend class UpgrAck;
         friend class Nack;
         int numCycles; // number of Cycles
+        int totL1Accesses; // would be incremented on every process_log call
+        int totL1Misses; // would be incremented every time check_cache fails in process_log
+        int totL1UpgrMisses; // would be incremented every time in process_log if isStore == true, block is in cache and is not in M or E state.
+        int totL2Misses;  // should be incremented whenever GetX/Get reaches L2 and it doesn't have the block.
+        unordered_map<MsgType, ull> msgReceivedL1, msgReceivedL2;
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;
     public:
         int nextGlobalMsgToProcess;
         void run();
-        Processor(): numCycles(0), nextGlobalMsgToProcess(0) {
+        Processor(): numCycles(0), nextGlobalMsgToProcess(0), totL1Accesses(0), totL1Misses(0), totL1UpgrMisses(0), totL2Misses(0) {
             for(int i = 0; i < NUM_CACHE; i++) {
                 L1Caches.emplace_back(i);
                 L2Caches.emplace_back(i);
@@ -426,6 +431,12 @@ class Processor {
         }
         Processor(Processor&& other) noexcept:
             numCycles(move(other.numCycles)),
+            totL1Accesses(move(other.totL1Accesses)),
+            totL1Misses(move(other.totL1Misses)),
+            totL1UpgrMisses(move(other.totL1UpgrMisses)),
+            totL2Misses(0),
+            msgReceivedL1(move(other.msgReceivedL1)),
+            msgReceivedL2(move(other.msgReceivedL2)),
             L1Caches(move(other.L1Caches)),
             L2Caches(move(other.L2Caches)),
             nextGlobalMsgToProcess(move(other.nextGlobalMsgToProcess)) {}

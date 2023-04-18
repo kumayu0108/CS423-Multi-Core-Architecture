@@ -74,6 +74,9 @@ void InvAck::handle(Processor &proc, bool toL1) {
         }
         else {  // inv ack sent to L2 (for inclusivity)
             auto &l2 = proc.L2Caches[to];
+            if(!l2.numInvAcksToCollectForIncl.contains(blockAddr)) { // this would happen when L2 sent inv for inc. and at the same time L1 evicted, thus L2's inv reached L1 afterwards.
+                return;
+            }
             ASSERT(l2.numInvAcksToCollectForIncl.contains(blockAddr));
             auto &inv_ack_struct = l2.numInvAcksToCollectForIncl[blockAddr];
             ASSERT(inv_ack_struct.waitForNumMessages > 0);
@@ -88,20 +91,23 @@ void InvAck::handle(Processor &proc, bool toL1) {
                 // l2.cacheData[st][inv_ack_struct]
                 if(inv_ack_struct.L1CacheNums.begin()->second) { // Getx request
                     ASSERT(inv_ack_struct.L1CacheNums.size() == 1); // only 1 Getx can be served
+                    ASSERT(!l2.directory[st].contains(inv_ack_struct.blockAddr)); // cannot be in directory before.
                     int l1_ind_to_send = inv_ack_struct.L1CacheNums.begin()->first;
+                    l2.directory[st].emplace(inv_ack_struct.blockAddr, DirEnt(false, -1));
                     l2.directory[st][inv_ack_struct.blockAddr].dirty = true;
                     l2.directory[st][inv_ack_struct.blockAddr].ownerId = l1_ind_to_send;
                     auto &dir_ent = l2.directory[st][inv_ack_struct.blockAddr];
                     ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
                     ASSERT(l2.cacheData[st].size() < NUM_L2_WAYS);
-                    // add to cache.
+                    // Add to cache.
                     ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
-                    l2.timeBlockAdded[st].insert({nwTime, blockAddr});
-                    l2.cacheData[st][blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
+                    l2.timeBlockAdded[st].insert({nwTime, inv_ack_struct.blockAddr});
+                    l2.cacheData[st][inv_ack_struct.blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
                     unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_ind_to_send, false, inv_ack_struct.blockAddr, 0, State::M));
                     proc.L1Caches[l1_ind_to_send].incomingMsg.push_back(move(putx));
                 }
                 else {  // Get request
+                    l2.directory[st].emplace(inv_ack_struct.blockAddr, DirEnt(false, -1));
                     for(auto &[l1_ind_to_send, getx] : inv_ack_struct.L1CacheNums) {
                         ASSERT(!getx);
                         l2.directory[st][inv_ack_struct.blockAddr].bitVector.set(l1_ind_to_send);
@@ -111,8 +117,8 @@ void InvAck::handle(Processor &proc, bool toL1) {
                     ASSERT(l2.cacheData[st].size() < NUM_L2_WAYS);
                     // add to cache.
                     ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
-                    l2.timeBlockAdded[st].insert({nwTime, blockAddr});
-                    l2.cacheData[st][blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
+                    l2.timeBlockAdded[st].insert({nwTime, inv_ack_struct.blockAddr});
+                    l2.cacheData[st][inv_ack_struct.blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
                 }
                 l2.numInvAcksToCollectForIncl.erase(blockAddr);
             }
@@ -199,6 +205,7 @@ void Get::handle(Processor &proc, bool toL1) {
                 }
             }
             else if(l2.check_cache(blockAddr)) { // if present in cache but not in dir
+                l2.directory[st].emplace(blockAddr, DirEnt(false, -1));
                 auto &dir_ent = l2.directory[st][blockAddr];
                 unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));
                 dir_ent.ownerId = from;
@@ -211,8 +218,9 @@ void Get::handle(Processor &proc, bool toL1) {
             else {
                 proc.totL2Misses++;
                 // TODO: evict, replace and update directory state. (done)
-                auto &dir_ent = l2.directory[st][blockAddr];
                 if(l2.cacheData[st].size() < NUM_L2_WAYS) { // no need to send invalidations
+                    l2.directory[st].emplace(blockAddr, DirEnt(false, -1));
+                    auto &dir_ent = l2.directory[st][blockAddr]; 
                     // add to cache.
                     ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
                     l2.timeBlockAdded[st].insert({nwTime, blockAddr});
@@ -373,6 +381,7 @@ void Getx::handle(Processor &proc, bool toL1) {
             }
             else if(l2.check_cache(blockAddr)) { // if present in cache but not in dir
                 //PRAMODH:: Should this even happen?? If inserting correctly, shouldnt occur
+                l2.directory[st].emplace(blockAddr, DirEnt(false, -1));
                 auto &dir_ent = l2.directory[st][blockAddr];
                 // if not present in Dir, first time block goes in E state
                 unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, from, false, blockAddr, 0, State::E));
@@ -385,8 +394,10 @@ void Getx::handle(Processor &proc, bool toL1) {
             }
             else {
                 proc.totL2Misses++;
-                auto &dir_ent = l2.directory[st][blockAddr];
+                
                 if(l2.cacheData[st].size() < NUM_L2_WAYS) { // no need to send invalidations
+                    l2.directory[st].emplace(blockAddr, DirEnt(false, -1));
+                    auto &dir_ent = l2.directory[st][blockAddr];
                     // add to cache.
                     ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
                     l2.timeBlockAdded[st].insert({nwTime, blockAddr});
@@ -470,14 +481,17 @@ void Wb::handle(Processor &proc, bool toL1) {
 
                     }
                 }
-                else { // evicted for invlusive purpose; handled directory.
+                else { // evicted for inclusive purpose; handled directory.
                     ASSERT(dir_ent.ownerId == from);
-                    l2.directory[st].erase(blockAddr);
                     ASSERT(l2.numInvAcksToCollectForIncl.contains(blockAddr));
+                    l2.directory[st].erase(blockAddr);
+                    l2.evict(blockAddr);
                     auto &inv_ack_struct = l2.numInvAcksToCollectForIncl[blockAddr];
-                    ASSERT(inv_ack_struct.waitForNumMessages == 1 and inv_ack_struct.L1CacheNums.begin()->second);
+                    ASSERT(inv_ack_struct.waitForNumMessages == 1);
+                    // The requesting message could be Get/GetX both.
                     ASSERT(!l2.directory[st].contains(inv_ack_struct.blockAddr));
                     int l1_cache_num = (inv_ack_struct.L1CacheNums.begin()->first);
+                    l2.directory[st].emplace(inv_ack_struct.blockAddr, DirEnt(false, -1));
                     l2.directory[st][inv_ack_struct.blockAddr].ownerId = l1_cache_num;
                     l2.directory[st][inv_ack_struct.blockAddr].dirty = true;
                     ASSERT2(dir_ent.ownerId >= 0 and dir_ent.ownerId < proc.L1Caches.size(), std :: cerr << dir_ent.ownerId);
@@ -485,8 +499,13 @@ void Wb::handle(Processor &proc, bool toL1) {
                     l2.directory[st][inv_ack_struct.blockAddr].pending = false;
                     l2.directory[st][inv_ack_struct.blockAddr].toBeReplaced = false;
 
+                    ull nwTime = (l2.timeBlockAdded[st].empty() ? 1 : (*l2.timeBlockAdded[st].rbegin()).first + 1);
+                    l2.timeBlockAdded[st].insert({nwTime, inv_ack_struct.blockAddr});
+                    l2.cacheData[st][inv_ack_struct.blockAddr] = {nwTime, State::I}; // keeping it state 'I' as there's no notion of state in L2
+
                     unique_ptr<Message> putx(new Putx(MsgType::PUTX, to, l1_cache_num, false, inv_ack_struct.blockAddr, 0, State::M));
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
+                    l2.numInvAcksToCollectForIncl.erase(blockAddr);
                 }
             }
             else {  // this means that cache block was evicted and we did not send any inv request.

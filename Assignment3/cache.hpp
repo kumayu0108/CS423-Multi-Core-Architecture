@@ -7,7 +7,7 @@ class Processor;
 // this function only removes this addr from cache & returns if anything got evicted
 bool L1::evict(ull addr) {
 #ifdef PRINT_DEBUG
-    if(addr == 140538153542400) {
+    if(addr == 140538015869376) {
         std::cout << "evicted by L1 : " << id <<"\n";
     }
 #endif
@@ -178,7 +178,7 @@ bool L1::check_nacked_requests(Processor &proc) {
                 }
                 else {
 #ifdef PRINT_DEBUG
-                    if(block_id_nack_request == 140538153542400) {
+                    if(block_id_nack_request == 140538015869376 && proc.numCycles > 98183206) {
                         std::cout << "Getx (earlier nacked) sent by L1 : " << id << "\n";
                     }
 #endif
@@ -266,7 +266,7 @@ void L1::process_log(Processor &proc) {
                 }
             }
             else {
-                // if(log.addr == 140538153542400) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
+                // if(log.addr == 140538015869376 && proc.numCycles > 98183206) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getXReplyWait.insert(log.addr);
                 unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
@@ -290,7 +290,7 @@ void L1::process_log(Processor &proc) {
             else {
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getReplyWait[log.addr] = false;
-                // if(log.addr == 140538153542400) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
+                // if(log.addr == 140538015869376 && proc.numCycles > 98183206) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
                 unique_ptr<Message> get(new Get(MsgType::GET, id, l2_bank_num, true, log.addr));
                 proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(get));
             }

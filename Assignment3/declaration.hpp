@@ -79,13 +79,15 @@ struct DirEnt {
     bool dirty;
     bool pending; // is a boolean enough, do we need more?
     bool toBeReplaced; // needed for inclusive eviction
+    std::string debug_string;
 
-    DirEnt(): dirty(true), ownerId(-1), pending(false), toBeReplaced(false) { bitVector.reset(); };
+    DirEnt(): dirty(true), ownerId(-1), pending(false), toBeReplaced(false), debug_string("") { bitVector.reset(); };
     DirEnt(DirEnt&& other) noexcept: dirty(move(other.dirty)),
         bitVector(move(other.bitVector)),
         ownerId(move(other.ownerId)),
         pending(move(other.pending)),
-        toBeReplaced(move(other.toBeReplaced)) {}
+        toBeReplaced(move(other.toBeReplaced)),
+        debug_string(move(other.debug_string)) {}
 };
 
 struct cacheBlock {
@@ -188,14 +190,16 @@ class Getx : public Message {
 
 class Put: public Message {
     public:
+        std::string debug_msg;
         ull blockAddr; // which cache block ADDR
         void handle(Processor &proc, bool toL1);
         Put(const Put&) = delete; // delete copy ctor explicitly,since it's a move only cls.
         Put& operator=(const Put&) = delete; // delete copy assignment ctor too.
         Put() : Message() {}
-        Put(Put&& other) noexcept : Message(move(other)), blockAddr(move(other.blockAddr)) {}
-        Put(MsgType msgType, int from, int to, bool fromL1, ull blockAddr) :
-        Message(msgType, from, to, fromL1), blockAddr(blockAddr) {}
+        Put(Put&& other) noexcept : 
+            Message(move(other)), blockAddr(move(other.blockAddr)), debug_msg(move(other.debug_msg)) {}
+        Put(MsgType msgType, int from, int to, bool fromL1, ull blockAddr, std::string debug_msg = "") :
+        Message(msgType, from, to, fromL1), blockAddr(blockAddr), debug_msg(debug_msg) {}
 };
 
 class Putx: public Message {

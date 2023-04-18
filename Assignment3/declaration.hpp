@@ -81,7 +81,9 @@ struct DirEnt {
     bool toBeReplaced; // needed for inclusive eviction
     std::string debug_string;
 
-    DirEnt(): dirty(false), ownerId(-1), pending(false), toBeReplaced(false), debug_string("") { bitVector.reset(); };
+    // DirEnt(): dirty(false), ownerId(-1), pending(false), toBeReplaced(false), debug_string("") { bitVector.reset(); };
+    DirEnt() { ASSERT(false); }
+    DirEnt(bool dirty, int ownerId, bool pending = false, bool toBeReplaced = false) : dirty(dirty), ownerId(ownerId), pending(pending), toBeReplaced(toBeReplaced) {}
     DirEnt(DirEnt&& other) noexcept: dirty(move(other.dirty)),
         bitVector(move(other.bitVector)),
         ownerId(move(other.ownerId)),

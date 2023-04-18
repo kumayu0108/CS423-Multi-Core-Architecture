@@ -319,10 +319,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                 }
                 else if(dir_ent.dirty) {
                     int owner = dir_ent.ownerId;
-                    if(owner == from) {
-                        std :: cout << blockAddr << "\n";
-                    }
-                    ASSERT(owner != from);
+                    ASSERT2(owner != from, std :: cout << blockAddr << "\n");
                     unique_ptr<Message> getx(new Getx(MsgType::GETX, from, owner, true, blockAddr)); // L2 masks itself as the requestor
                     dir_ent.ownerId = from;
                     dir_ent.pending = true;
@@ -331,8 +328,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                 }
                 else { // shared; would send invalidations to everyone
                     dir_ent.ownerId = from;
-                    dir_ent.pending = true;
-                    dir_ent.debug_string = "GetX from (dir shared) L1:" + std::to_string(from) + " set pending true ";
+                    // dir_ent.debug_string = "GetX from (dir shared) L1:" + std::to_string(from) + " set pending true ";
                     dir_ent.dirty = true;
                     int numInvToSend = 0;
                     for(int i = 0; i < dir_ent.bitVector.size(); i++) {
@@ -423,8 +419,8 @@ void Wb::handle(Processor &proc, bool toL1) {
                                     l1_to_send_get = i;
                                 }
                             }
-                            if(l1_to_send_get == -1) {std::cout << blockAddr << "\n";}
-                            ASSERT(l1_to_send_get != -1);
+                            ASSERT2(l1_to_send_get != -1, std::cout << blockAddr << "\n");
+                            ASSERT(proc.L1Caches[l1_to_send_get].getReplyWait.contains(blockAddr));
                             unique_ptr<Message> put(new Put(MsgType::PUT, from, l1_to_send_get, true, blockAddr, dir_ent.debug_string + "forwarded wb as put"));
                             proc.L1Caches[put->to].incomingMsg.push_back(move(put));
                         }

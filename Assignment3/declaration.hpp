@@ -262,10 +262,10 @@ class Cache {
         // probably need these as public
         vector<unordered_map<ull, cacheBlock>> cacheData;    // addr -> time map
         vector<set<timeAddr>> timeBlockAdded;  // stores time and addr for eviction.
-        unordered_map<ull, NACKStruct> outstandingNacks;
         // unordered_map<ull, State> cacheState; // not required, already maintained in cacheBlock.
         int id; // id of cache
     public:
+        unordered_map<ull, NACKStruct> outstandingNacks;
         deque<unique_ptr<Message>> incomingMsg; // incoming messages from L2 and other L1s
         virtual cacheBlock evict_replace(Processor& proc, ull addr, State state) = 0;
         virtual bool check_cache(ull addr) = 0;
@@ -318,11 +318,11 @@ class L1 : public Cache {
         }
     public:
         // getReplyWait and getXReplyWait would be used to check if there is a previous Get/Getx request. They would get cleared on Put/Putx.
-        unordered_map<ull, bool> getReplyWait;
+        unordered_map<ull, std::pair<int, bool>> getReplyWait; // cycle number for debug (int) and if need to send Upgr (bool)
         unordered_set<ull> getXReplyWait;
         unordered_set<ull> upgrReplyWait;
         unordered_map<ull, InvAckStruct> numAckToCollect; // block -> num; used when we want to collect inv acks for Getx request.
-        unordered_set<ull> writeBackAckWait; // wait for wb ack;
+        // unordered_set<ull> writeBackAckWait; // wait for wb ack;
         inline ull set_from_addr(ull addr) { return ((addr << LOG_BLOCK_SIZE) & L1_SET_BITS); }
         bool check_cache(ull addr);
         bool evict(ull addr);

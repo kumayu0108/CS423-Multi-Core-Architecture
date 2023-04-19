@@ -7,7 +7,7 @@ class Processor;
 // this function only removes this addr from cache & returns if anything got evicted
 bool L1::evict(ull addr) {
 #ifdef PRINT_DEBUG
-    if(addr == 140538015869376) {
+    if(addr == 5108736) {
         std::cout << "evicted by L1 : " << id <<"\n";
     }
 #endif
@@ -164,7 +164,7 @@ bool L1::check_nacked_requests(Processor &proc) {
             else {  // if not in cache send Getx 
                 if(getReplyWait.contains(block_id_nack_request)) {  // if sent a Get
                     ASSERT(!getXReplyWait.contains(block_id_nack_request));
-                    getReplyWait[block_id_nack_request] = true; // send an upgrade when get returns
+                    getReplyWait[block_id_nack_request].second = true; // send an upgrade when get returns
                 }
                 else if(upgrReplyWait.contains(block_id_nack_request)) { // situation when we have sent an upgrade, but received inv due to race between upgr and upgr/getx of other L1. This upgr would be nacked, and retried in the future.
                     // do nothing
@@ -178,7 +178,7 @@ bool L1::check_nacked_requests(Processor &proc) {
                 }
                 else {
 #ifdef PRINT_DEBUG
-                    if(block_id_nack_request == 140538015869376 && proc.numCycles > 98183206) {
+                    if(block_id_nack_request == 5108736 && proc.numCycles > 45723149) {
                         std::cout << "Getx (earlier nacked) sent by L1 : " << id << "\n";
                     }
 #endif
@@ -256,7 +256,7 @@ void L1::process_log(Processor &proc) {
                 // do nothing
             }
             else if(getReplyWait.contains(log.addr)){
-                getReplyWait[log.addr] = true;
+                getReplyWait[log.addr].second = true;
             }
             else if(numAckToCollect.contains(log.addr)) { // already sent and reecived upgr/getx replies but waiting for inv acks.
                 // do nothing
@@ -270,7 +270,7 @@ void L1::process_log(Processor &proc) {
                 }
             }
             else {
-                // if(log.addr == 140538015869376 && proc.numCycles > 98183206) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
+                // if(log.addr == 5108736 && proc.numCycles > 45723149) {std::cout << "getx sent by : " << id << " at 177 : " << proc.numCycles << "\n";}
                 auto l2_bank_num = get_llc_bank(log.addr);
                 getXReplyWait.insert(log.addr);
                 unique_ptr<Message> getx(new Getx(MsgType::GETX, id, l2_bank_num, true, log.addr));
@@ -293,8 +293,9 @@ void L1::process_log(Processor &proc) {
             }
             else {
                 auto l2_bank_num = get_llc_bank(log.addr);
-                getReplyWait[log.addr] = false;
-                // if(log.addr == 140538015869376 && proc.numCycles > 98183206) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
+                getReplyWait[log.addr].first = proc.numCycles;
+                getReplyWait[log.addr].second = false;
+                // if(log.addr == 5108736 && proc.numCycles > 45723149) {std::cout << "get sent by : " << id << "at 199 : " << proc.numCycles << "\n";}
                 unique_ptr<Message> get(new Get(MsgType::GET, id, l2_bank_num, true, log.addr));
                 proc.L2Caches[l2_bank_num].incomingMsg.push_back(move(get));
             }
@@ -557,9 +558,20 @@ void Processor::run() {
         numCycles++;
         if(!progressMade) {break;}
     }
-    std::cout << "Number Of Cycles : " << numCycles << "\n";
-    std::cout << "Number Of L1 Accesses : " << totL1Accesses << "\n";
-    std::cout << "Number Of L1 Misses : " << totL1Misses << "\n";
+    for(int i =0 ; i < NUM_CACHE; i++) {
+        ASSERT(L2Caches[i].numInvAcksToCollectForIncl.empty());
+    }
+    for(int i = 0; i < NUM_CACHE; i++) {
+        auto &l1 = L1Caches[i];
+        ASSERT(l1.outstandingNacks.empty());
+        ASSERT2(l1.getReplyWait.empty(), std::cerr << l1.getReplyWait.size() << "\n"; for(auto &x : l1.getReplyWait) {std :: cerr << x.first << " -> " << x.second.first << " " << x.second.second << " | ";} std :: cerr << "\n"; );
+        ASSERT(l1.getXReplyWait.empty());
+        ASSERT(l1.upgrReplyWait.empty());
+        ASSERT(l1.numAckToCollect.empty());
+    }
+    std::cout << "Number Of Cycles         : " << numCycles << "\n";
+    std::cout << "Number Of L1 Accesses    : " << totL1Accesses << "\n";
+    std::cout << "Number Of L1 Misses      : " << totL1Misses << "\n";
     std::cout << "Number Of Upgrade misses : " << totL1UpgrMisses << "\n";
-    std::cout << "Number Of L2 Misses : " << totL2Misses << "\n";    
+    std::cout << "Number Of L2 Misses      : " << totL2Misses << "\n";    
 }

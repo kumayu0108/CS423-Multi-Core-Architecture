@@ -12,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <limits>
+#include <iomanip>
 
 // #define PRINT_DEBUG
 // #define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
@@ -49,7 +50,7 @@ constexpr int NUM_CACHE = 8;
 constexpr int NACK_WAIT_CYCLES = 5;
 int trace[MAX_PROC];
 
-enum MsgType { INV, INV_ACK, NACK, WB, WB_ACK, GET, GETX, PUT, PUTX, UPGR, UPGR_ACK };
+enum MsgType { INV, INV_ACK, NACK, WB, GET, GETX, PUT, PUTX, UPGR, UPGR_ACK };
 enum State {M, E, S, I};
 
 // The data is logged in binary in the format of the following struct
@@ -306,16 +307,6 @@ class L1 : public Cache {
         char buffer[MAX_BUF_L1 * sizeof(LogStruct) + 2];
         deque<LogStruct> logs;
         unique_ptr<Message> tempSpace; // when we deque, we need to store the top message.
-        void read_if_reqd(){
-            if(!logs.empty()){ return; }
-            int num_bytes_read = read(inputTrace, buffer, MAX_BUF_L1 * sizeof(LogStruct));
-            int ind = 0;
-            while(ind < num_bytes_read and ind + sizeof(LogStruct) <= num_bytes_read){
-                LogStruct *tmp_struct = (LogStruct *)&buffer[ind];
-                logs.push_back(*tmp_struct);
-                ind += sizeof(LogStruct);
-            }
-        }
     public:
         // getReplyWait and getXReplyWait would be used to check if there is a previous Get/Getx request. They would get cleared on Put/Putx.
         unordered_map<ull, std::pair<int, bool>> getReplyWait; // cycle number for debug (int) and if need to send Upgr (bool)
@@ -333,7 +324,7 @@ class L1 : public Cache {
         bool check_nacked_requests(Processor &proc);
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
-            this->inputTrace = open(tmp.c_str(), O_RDONLY);
+            inputTrace = open(tmp.c_str(), O_RDONLY);
             while(true) {
                 int num_bytes_read = read(inputTrace, buffer, MAX_BUF_L1 * sizeof(LogStruct));
                 if(num_bytes_read == 0) {
@@ -346,6 +337,7 @@ class L1 : public Cache {
                     ind += sizeof(LogStruct);
                 }
             }
+            close(inputTrace);
         }
         L1(const L1&) = delete; // delete copy ctor explicitly, since it's a move only cls.
         L1& operator=(const L1&) = delete; // delete copy assignment ctor too.
@@ -361,7 +353,7 @@ class L1 : public Cache {
                     buffer[i] = move(other.buffer[i]);
                 }
             }
-        ~L1(){ close(inputTrace); }
+        ~L1(){ ASSERT(logs.empty()); }
 };
 class LLCBank : public Cache {
     private:

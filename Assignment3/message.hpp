@@ -7,7 +7,7 @@
 
 // It could happen that we receive inv requests for a block which is waiting for upgr, if upgr request races with another upgr/getx or if L2 sends inv for inclusive purpose.
 void Inv::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::INV]++ : proc.msgReceivedL2[MsgType::INV]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::INV]++ : proc.msgReceivedL2[to][MsgType::INV]++;
     auto &l1 = proc.L1Caches[to];
     // evict from L1
     // if(l1.check_cache(blockAddr)){
@@ -58,7 +58,7 @@ void Inv::handle(Processor &proc, bool toL1) {
 }
 
 void InvAck::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::INV_ACK]++ : proc.msgReceivedL2[MsgType::INV_ACK]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::INV_ACK]++ : proc.msgReceivedL2[to][MsgType::INV_ACK]++;
     if(fromL1) {
         if(toL1) { // inv ack sent to another L1
 #ifdef PRINT_DEBUG
@@ -166,7 +166,7 @@ void InvAck::handle(Processor &proc, bool toL1) {
 
 // this also updates priority for cache block when evicted.
 void Put::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::PUT]++ : proc.msgReceivedL2[MsgType::PUT]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::PUT]++ : proc.msgReceivedL2[to][MsgType::PUT]++;
     // VPG : make replace function virtual in Cache class.
     // in GET handle, we have a branch where we replace block and send invs to blocks.
     // basically replace for L2. Put needs us to write replace for L1 basically. Can split into two fns for reuse.
@@ -205,7 +205,7 @@ void Put::handle(Processor &proc, bool toL1) {
 
 // update priority for cache blocks
 void Get::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::GET]++ : proc.msgReceivedL2[MsgType::GET]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::GET]++ : proc.msgReceivedL2[to][MsgType::GET]++;
     if(fromL1) {
         if(!toL1) {
 #ifdef PRINT_DEBUG
@@ -252,7 +252,7 @@ void Get::handle(Processor &proc, bool toL1) {
                 proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
             }
             else {
-                proc.totL2Misses++;
+                proc.totL2Misses[to]++;
                 // TODO: evict, replace and update directory state. (done)
                 if(l2.cacheData[st].size() < NUM_L2_WAYS) { // no need to send invalidations
                     l2.directory[st].emplace(blockAddr, DirEnt(false, -1));
@@ -319,7 +319,7 @@ void Get::handle(Processor &proc, bool toL1) {
 
 // this also updates priority of blocks as much as possible who were in the pending state.
 void Putx::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::PUTX]++ : proc.msgReceivedL2[MsgType::PUTX]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::PUTX]++ : proc.msgReceivedL2[to][MsgType::PUTX]++;
     if(toL1) {
 #ifdef PRINT_DEBUG
         if(blockAddr == 5108736 && proc.numCycles > 45723149) {std::cout << "putx sent by fromL1:" << fromL1 << " to L1: " << to << " received at 221 : " << proc.numCycles << "\n";}
@@ -376,7 +376,7 @@ void Putx::handle(Processor &proc, bool toL1) {
 
 // update priority for cache blocks
 void Getx::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::GETX]++ : proc.msgReceivedL2[MsgType::GETX]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::GETX]++ : proc.msgReceivedL2[to][MsgType::GETX]++;
     if(fromL1) {
         if(!toL1) { // received at LLC bank
 #ifdef PRINT_DEBUG
@@ -434,7 +434,7 @@ void Getx::handle(Processor &proc, bool toL1) {
                 proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
             }
             else {
-                proc.totL2Misses++;
+                proc.totL2Misses[to]++;
                 
                 if(l2.cacheData[st].size() < NUM_L2_WAYS) { // no need to send invalidations
                     l2.directory[st].emplace(blockAddr, DirEnt(false, -1));
@@ -491,7 +491,7 @@ void Getx::handle(Processor &proc, bool toL1) {
 }
 
 void Wb::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::WB]++ : proc.msgReceivedL2[MsgType::WB]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::WB]++ : proc.msgReceivedL2[to][MsgType::WB]++;
     if(fromL1) {
         if(!toL1) { // wb sent to L2
 #ifdef PRINT_DEBUG
@@ -595,7 +595,7 @@ void Wb::handle(Processor &proc, bool toL1) {
 }
 
 void UpgrAck::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::UPGR_ACK]++ : proc.msgReceivedL2[MsgType::UPGR_ACK]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::UPGR_ACK]++ : proc.msgReceivedL2[to][MsgType::UPGR_ACK]++;
     if(!fromL1) {
         if(toL1) {
 #ifdef PRINT_DEBUG
@@ -646,7 +646,7 @@ void UpgrAck::handle(Processor &proc, bool toL1) {
 }
 
 void Upgr::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::UPGR]++ : proc.msgReceivedL2[MsgType::UPGR]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::UPGR]++ : proc.msgReceivedL2[to][MsgType::UPGR]++;
     if(fromL1) {
         if(!toL1) { // to L2
             auto &l2 = proc.L2Caches[to];
@@ -697,7 +697,7 @@ void Upgr::handle(Processor &proc, bool toL1) {
 }
 
 void Nack::handle(Processor &proc, bool toL1) {
-    toL1 ? proc.msgReceivedL1[MsgType::NACK]++ : proc.msgReceivedL2[MsgType::NACK]++;
+    toL1 ? proc.msgReceivedL1[to][MsgType::NACK]++ : proc.msgReceivedL2[to][MsgType::NACK]++;
     if(fromL1) { // L1 won't send a NACK
         ASSERT(false);
     }

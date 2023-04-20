@@ -195,7 +195,7 @@ bool L1::check_nacked_requests(Processor &proc) {
 }
 
 void L1::process_log(Processor &proc) {
-    proc.totL1Accesses++;
+    proc.totL1Accesses[id]++;
     auto log = logs.front();
     logs.pop_front();
     if(check_cache(log.addr)) { // also update priority except for the case of upgr.
@@ -225,17 +225,17 @@ void L1::process_log(Processor &proc) {
                 update_priority(log.addr);
             }
             else if(upgrReplyWait.contains(log.addr)) { // alreadt sent upgrade
-                proc.totL1UpgrMisses++;
+                proc.totL1UpgrMisses[id]++;
             }
             else if(numAckToCollect.contains(log.addr)) { // sent upgr/putx and received replies but waiting for replies.
-                proc.totL1UpgrMisses++;
+                proc.totL1UpgrMisses[id]++;
             }
             else if(outstandingNacks.contains(log.addr)) {
                 // were waiting to send either upgr or getx earlier, so wait until nack counter is 0.
-                proc.totL1UpgrMisses++;
+                proc.totL1UpgrMisses[id]++;
             }
             else { // cache state = Shared
-                proc.totL1UpgrMisses++;
+                proc.totL1UpgrMisses[id]++;
                 auto l2_bank_num = get_llc_bank(log.addr);
                 upgrReplyWait.insert(log.addr);
                 unique_ptr<Message> upgr(new Upgr(MsgType::UPGR, id, l2_bank_num, true, log.addr));
@@ -247,7 +247,7 @@ void L1::process_log(Processor &proc) {
         }
     }
     else {
-        proc.totL1Misses++;
+        proc.totL1Misses[id]++;
         if(log.isStore) {
             if(getXReplyWait.contains(log.addr)) {
                 // do nothing, already sent a Getx
@@ -561,12 +561,17 @@ void Processor::run() {
         ASSERT(l1.incomingMsg.empty());
     }
     std::cout << "Number Of Cycles         : " << numCycles << "\n";
-    std::cout << "Number Of L1 Accesses    : " << totL1Accesses << "\n";
-    std::cout << "Number Of L1 Misses      : " << totL1Misses << "\n";
-    std::cout << "Number Of Upgrade misses : " << totL1UpgrMisses << "\n";
-    std::cout << "Number Of L2 Misses      : " << totL2Misses << "\n";    
+    std::cout << "Number Of L1 Accesses    : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1Accesses[i] << " ";} std :: cout << "\n";
+    std::cout << "Number Of L1 Misses      : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1Misses[i] << " ";} std :: cout << "\n";
+    std::cout << "Number Of Upgrade misses : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1UpgrMisses[i] << " ";} std :: cout << "\n";
+    std::cout << "Number Of L2 Misses      : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL2Misses[i] << " ";} std :: cout << "\n";    
     std::vector <std::pair<std::string, MsgType>> all_enums = {{"Inv", INV}, {"Inv Ack", INV_ACK}, {"Nack", NACK}, {"Writeback", WB}, {"Get", GET}, {"Getx", GETX}, {"Put", PUT}, {"Putx", PUTX}, {"Upgr", UPGR}, {"Upgr Ack", UPGR_ACK}};
+    std :: cout << "Number of Messages received by L1/L2:\n";
     for (auto msg : all_enums) {
-        std :: cout << std :: setw(10) << msg.first << " -> L1 : " << std :: setw(10) << msgReceivedL1[msg.second] << " L2 : " << msgReceivedL2[msg.second] << "\n"; 
+        std :: cout << msg.first << "\n"; 
+        std :: cout << " L1 : "; for(int i = 0; i < NUM_CACHE; i++){std :: cout << std :: setw(8) << msgReceivedL1[i][msg.second] << " ";}
+        std :: cout << "\n";
+        std :: cout << " L2 : "; for(int i = 0; i < NUM_CACHE; i++){std :: cout << std :: setw(8) << msgReceivedL2[i][msg.second] << " ";}
+        std :: cout << "\n"; 
     }
 }

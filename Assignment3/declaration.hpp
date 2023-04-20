@@ -407,11 +407,11 @@ class Processor {
         friend class UpgrAck;
         friend class Nack;
         int numCycles; // number of Cycles
-        int totL1Accesses; // would be incremented on every process_log call
-        int totL1Misses; // would be incremented every time check_cache fails in process_log
-        int totL1UpgrMisses; // would be incremented every time in process_log if isStore == true, block is in cache and is not in M or E state.
-        int totL2Misses;  // should be incremented whenever GetX/Get reaches L2 and it doesn't have the block.
-        unordered_map<MsgType, ull> msgReceivedL1, msgReceivedL2;
+        std::unordered_map<int, int> totL1Accesses; // would be incremented on every process_log call
+        std::unordered_map<int, int> totL1Misses; // would be incremented every time check_cache fails in process_log
+        std::unordered_map<int, int> totL1UpgrMisses; // would be incremented every time in process_log if isStore == true, block is in cache and is not in M or E state.
+        std::unordered_map<int, int> totL2Misses;  // should be incremented whenever GetX/Get reaches L2 and it doesn't have the block.
+        std::unordered_map<int, unordered_map<MsgType, ull>> msgReceivedL1, msgReceivedL2;
         vector<L1> L1Caches;
         vector<LLCBank> L2Caches;
     public:

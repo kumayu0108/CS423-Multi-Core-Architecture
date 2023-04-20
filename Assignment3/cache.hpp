@@ -305,7 +305,6 @@ void L1::process_log(Processor &proc) {
 
 bool L1::process(Processor &proc) {
     bool progress = false;
-    read_if_reqd();
     progress |= check_nacked_requests(proc);
     if(!logs.empty() and proc.nextGlobalMsgToProcess >= logs.front().time) { // process from trace
         if(proc.nextGlobalMsgToProcess == logs.front().time) {proc.nextGlobalMsgToProcess++;}
@@ -356,11 +355,6 @@ bool L1::process(Processor &proc) {
             // this wb could also be received in response to an Invalidation due to maintaining inclusivity.
             case MsgType::WB:{
                 CALL_HANDLER(Wb, true);
-                break;
-            }
-
-            case MsgType::WB_ACK:{ // would not happen
-                ASSERT(false);
                 break;
             }
 
@@ -432,11 +426,6 @@ bool LLCBank::process(Processor &proc) {
         // this wb could also be received in response to an Invalidation due to maintaining inclusivity.
         case MsgType::WB:{
             CALL_HANDLER(Wb, false);
-            break;
-        }
-
-        case MsgType::WB_ACK:{ // would not happen
-            ASSERT(false);
             break;
         }
 
@@ -563,15 +552,21 @@ void Processor::run() {
     }
     for(int i = 0; i < NUM_CACHE; i++) {
         auto &l1 = L1Caches[i];
+        // ASSERT(l1.logs.empty());
         ASSERT(l1.outstandingNacks.empty());
         ASSERT2(l1.getReplyWait.empty(), std::cerr << l1.getReplyWait.size() << "\n"; for(auto &x : l1.getReplyWait) {std :: cerr << x.first << " -> " << x.second.first << " " << x.second.second << " | ";} std :: cerr << "\n"; );
         ASSERT(l1.getXReplyWait.empty());
         ASSERT(l1.upgrReplyWait.empty());
         ASSERT(l1.numAckToCollect.empty());
+        ASSERT(l1.incomingMsg.empty());
     }
     std::cout << "Number Of Cycles         : " << numCycles << "\n";
     std::cout << "Number Of L1 Accesses    : " << totL1Accesses << "\n";
     std::cout << "Number Of L1 Misses      : " << totL1Misses << "\n";
     std::cout << "Number Of Upgrade misses : " << totL1UpgrMisses << "\n";
     std::cout << "Number Of L2 Misses      : " << totL2Misses << "\n";    
+    std::vector <std::pair<std::string, MsgType>> all_enums = {{"Inv", INV}, {"Inv Ack", INV_ACK}, {"Nack", NACK}, {"Writeback", WB}, {"Get", GET}, {"Getx", GETX}, {"Put", PUT}, {"Putx", PUTX}, {"Upgr", UPGR}, {"Upgr Ack", UPGR_ACK}};
+    for (auto msg : all_enums) {
+        std :: cout << std :: setw(10) << msg.first << " -> L1 : " << std :: setw(10) << msgReceivedL1[msg.second] << " L2 : " << msgReceivedL2[msg.second] << "\n"; 
+    }
 }

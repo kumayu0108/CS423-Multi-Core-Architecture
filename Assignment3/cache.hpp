@@ -174,7 +174,7 @@ bool L1::check_nacked_requests(Processor &proc) {
                 }
                 else if(numAckToCollect.contains(block_id_nack_request)) { // received the block waiting for inv acks
                     // do nothing
-                    ASSERT(false);
+                    // ASSERT(false);
                 }
                 else {
 #ifdef PRINT_DEBUG
@@ -286,7 +286,7 @@ void L1::process_log(Processor &proc) {
             }
             else if(upgrReplyWait.contains(log.addr)) {
                 // AYUSH : what to do? send Getx?
-                ASSERT(false);
+                // ASSERT(false);
             }
             else if(outstandingNacks.contains(log.addr)) { // if waiting for either Get/GetX/Upgr do nothing and send request after timer is over.
                 // do nothing

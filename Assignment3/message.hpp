@@ -123,7 +123,7 @@ void InvAck::handle(Processor &proc, bool toL1) {
                 l2.directory[st].erase(blockAddr);
                 l2.evict(blockAddr);
                 // l2.cacheData[st][inv_ack_struct]
-                if(inv_ack_struct.L1CacheNums.begin()->second) { // Getx request
+                if(inv_ack_struct.L1CacheNums.begin()->second or inv_ack_struct.L1CacheNums.size() == 1) { // Getx request
                     ASSERT(inv_ack_struct.L1CacheNums.size() == 1); // only 1 Getx can be served
                     ASSERT(!l2.directory[st].contains(inv_ack_struct.blockAddr)); // cannot be in directory before.
                     int l1_ind_to_send = inv_ack_struct.L1CacheNums.begin()->first;

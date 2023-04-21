@@ -15,7 +15,7 @@
 #include <iomanip>
 
 // #define PRINT_DEBUG
-#define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
+// #define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
 #include <assert.h>
 
 #ifndef NDEBUG
@@ -324,6 +324,7 @@ class L1 : public Cache {
         bool check_nacked_requests(Processor &proc);
         L1(int id): Cache(id, NUM_L1_SETS), inputTrace(0), tempSpace(nullptr) {
             std::string tmp = "traces/addrtrace_" + std::to_string(id) + ".out";
+            std::cout << "Reading from " << tmp << "\n";
             inputTrace = open(tmp.c_str(), O_RDONLY);
             while(true) {
                 int num_bytes_read = read(inputTrace, buffer, MAX_BUF_L1 * sizeof(LogStruct));
@@ -333,6 +334,7 @@ class L1 : public Cache {
                 int ind = 0;
                 while(ind < num_bytes_read and ind + sizeof(LogStruct) <= num_bytes_read){
                     LogStruct *tmp_struct = (LogStruct *)&buffer[ind];
+                    if(logs.size() >= 1) {ASSERT(logs.back().time < (*tmp_struct).time);}
                     logs.push_back(*tmp_struct);
                     ind += sizeof(LogStruct);
                 }

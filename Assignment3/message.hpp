@@ -514,10 +514,13 @@ void Wb::handle(Processor &proc, bool toL1) {
                                     l1_to_send_get = i;
                                 }
                             }
+                            ASSERT(!proc.L1Caches[from].check_cache(blockAddr));
                             ASSERT2(l1_to_send_get != -1, std::cout << blockAddr << "\n");
                             ASSERT(proc.L1Caches[l1_to_send_get].getReplyWait.contains(blockAddr));
-                            unique_ptr<Message> put(new Put(MsgType::PUT, from, l1_to_send_get, true, blockAddr, dir_ent.debug_string + "forwarded wb as put"));
-                            proc.L1Caches[put->to].incomingMsg.push_back(move(put));
+                            dir_ent.ownerId = l1_to_send_get;
+                            dir_ent.dirty = true;
+                            unique_ptr<Message> putx(new Putx(MsgType::PUTX, from, l1_to_send_get, true, blockAddr, 0, State::M));
+                            proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                         }
                         else { // since owner changed, directory going from M -> M state, forward a Putx.
                             unique_ptr<Message> putx(new Putx(MsgType::PUTX, from, dir_ent.ownerId, true, blockAddr, 0, State::M));

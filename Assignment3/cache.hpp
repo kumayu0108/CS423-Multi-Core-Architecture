@@ -306,7 +306,7 @@ void L1::process_log(Processor &proc) {
 bool L1::process(Processor &proc) {
     bool progress = false;
     progress |= check_nacked_requests(proc);
-    if(!logs.empty() and proc.nextGlobalMsgToProcess >= logs.front().time) { // process from trace
+    if(!logs.empty() and proc.nextGlobalMsgToProcess == logs.front().time) { // process from trace
         if(proc.nextGlobalMsgToProcess == logs.front().time) {proc.nextGlobalMsgToProcess++;}
         progress = true;
         process_log(proc);
@@ -552,7 +552,7 @@ void Processor::run() {
     }
     for(int i = 0; i < NUM_CACHE; i++) {
         auto &l1 = L1Caches[i];
-        // ASSERT(l1.logs.empty());
+        ASSERT2(l1.logs.empty(), std::cout << l1.logs.size() << " " << l1.logs.front().time << " " << nextGlobalMsgToProcess << "\n");
         ASSERT(l1.outstandingNacks.empty());
         ASSERT2(l1.getReplyWait.empty(), std::cerr << l1.getReplyWait.size() << "\n"; for(auto &x : l1.getReplyWait) {std :: cerr << x.first << " -> " << x.second.first << " " << x.second.second << " | ";} std :: cerr << "\n"; );
         ASSERT(l1.getXReplyWait.empty());
@@ -561,6 +561,8 @@ void Processor::run() {
         ASSERT(l1.incomingMsg.empty());
     }
     std::cout << "Number Of Cycles         : " << numCycles << "\n";
+    ull tot_l1_accesses = 0;
+    std::cout << "Total Number of L1 Accesses : ";  for(int i = 0; i < NUM_CACHE; i++){ tot_l1_accesses += totL1Accesses[i]; } std::cout << tot_l1_accesses << "\n";
     std::cout << "Number Of L1 Accesses    : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1Accesses[i] << " ";} std :: cout << "\n";
     std::cout << "Number Of L1 Misses      : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1Misses[i] << " ";} std :: cout << "\n";
     std::cout << "Number Of Upgrade misses : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1UpgrMisses[i] << " ";} std :: cout << "\n";

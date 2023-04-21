@@ -15,7 +15,7 @@
 #include <iomanip>
 
 // #define PRINT_DEBUG
-// #define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
+#define NDEBUG   // uncomment to disable asserts. Need to put this before #include <asserts.h>
 #include <assert.h>
 
 #ifndef NDEBUG
@@ -305,9 +305,9 @@ class L1 : public Cache {
         };
         int inputTrace; // from where you would read line to line
         char buffer[MAX_BUF_L1 * sizeof(LogStruct) + 2];
-        deque<LogStruct> logs;
         unique_ptr<Message> tempSpace; // when we deque, we need to store the top message.
     public:
+        deque<LogStruct> logs;
         // getReplyWait and getXReplyWait would be used to check if there is a previous Get/Getx request. They would get cleared on Put/Putx.
         unordered_map<ull, std::pair<int, bool>> getReplyWait; // cycle number for debug (int) and if need to send Upgr (bool)
         unordered_set<ull> getXReplyWait;
@@ -353,7 +353,7 @@ class L1 : public Cache {
                     buffer[i] = move(other.buffer[i]);
                 }
             }
-        ~L1(){ ASSERT(logs.empty()); }
+        ~L1(){ ASSERT2(logs.empty(), std::cout << logs.size() << "\n"); }
 };
 class LLCBank : public Cache {
     private:

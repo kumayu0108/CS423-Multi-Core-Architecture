@@ -33,11 +33,11 @@ struct MetaData {
     std::unordered_map<ull, unsigned long> tla; // maps time of last access of a block.
     std::unordered_map<ull, int> tshare; // each block to a 8 bit vector to see log if thread touches it.
     std::unordered_map<ull, unsigned long> adis; // maps access distance to number of times that distance occurs.
-    bool is_store; // boolean; tells if the current machine access is a store or not
+    // bool is_store; // boolean; tells if the current machine access is a store or not
     unsigned int time = 0; // added bonus, time at end of simulation is total machine accesses
     std::vector <LogStruct> logData[MAX_PROC];
 
-    inline void update(ull addr, int tid, bool cache = false){
+    inline void update(ull addr, int tid, bool isStore, bool cache = false){
         ull blk_id = addr / blk_sz;
         // if previous entry exists, log access distance too.
         if(tla.find(blk_id) != tla.end())
@@ -45,29 +45,31 @@ struct MetaData {
         tla[blk_id] = time; // log this for lru cache simulation and access distance.
         if(!cache)
             tshare[blk_id] |= (1<<tid); // set tid'th bit to 1, if accessed by tid.
-        logData[tid].push_back({is_store, time, (blk_id << LOG_BLOCK_SIZE)});
+        logData[tid].push_back({isStore, time, (blk_id << LOG_BLOCK_SIZE)});
         time++; // increase time for each access to compute distances correctly.
     }
 } globalMData;
 
 // write any size, any addr, as much as you want wrt 1, 2, 4, 8 bytes.
 // Should handle 0 byte writes correctly;
-inline VOID log_metrics(ull addr, int tid) {
+inline VOID log_metrics(ull addr, int tid, bool isStore) {
     // cache.simulator(addr, tid);
-    globalMData.update(addr, tid);
+    PIN_GetLock(&pinLock, tid + 1);
+    globalMData.update(addr, tid, isStore);
+    PIN_ReleaseLock(&pinLock);
     return;
 }
-inline VOID log_bdry(ull addr, ull size, int tid) {
+inline VOID log_bdry(ull addr, ull size, int tid, bool isStore) {
     while(size >> 3 != 0) {
         // traverse in multiples of 8 until size < 8.
-        log_metrics(addr, tid);
+        log_metrics(addr, tid, isStore);
         addr+=8; size-=8;
     }
     if(size == 0) return; // help branch prediction? idk. most of sizes are 8 bytes.
     for(int i = 4; i > 0; i>>=1) {
         if(size / i != 0) {
         // checking only once because (size / i) <= 1 at every iteration.
-            log_metrics(addr, tid);
+            log_metrics(addr, tid, isStore);
             addr+=i; size-=i;
         }
     }
@@ -78,48 +80,48 @@ VOID log_mem_load(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     ull addr = (ull)addr_p;
     ull start_blk = addr / blk_sz;
     ull end_blk = (addr + size - 1)/ blk_sz;
-    PIN_GetLock(&pinLock, tid + 1);
-    globalMData.is_store = false;
+    // PIN_GetLock(&pinLock, tid + 1);
+    // globalMData.is_store = false;
     if(start_blk == end_blk){ // to the same block, no complex logic required.
-        log_bdry(addr, size, (int)tid);
-        PIN_ReleaseLock(&pinLock);
+        log_bdry(addr, size, (int)tid, false);
+        // PIN_ReleaseLock(&pinLock);
         return;
     }
     ull start_acc = (start_blk + 1) * blk_sz - addr; // write until block boundary.
     ull end_acc = addr + size - (end_blk * blk_sz); // bytes to be written at last;
 
-    log_bdry(addr, start_acc, (int)tid);
+    log_bdry(addr, start_acc, (int)tid, false);
     addr = (start_blk + 1) * blk_sz;
     size -= (start_acc + end_acc); // size should be a multiple of blk_sz now
-    log_bdry(addr, size, (int)tid);
+    log_bdry(addr, size, (int)tid, false);
     addr+=size;
-    log_bdry(addr, end_acc, (int)tid);
+    log_bdry(addr, end_acc, (int)tid, false);
 
-    PIN_ReleaseLock(&pinLock);
+    // PIN_ReleaseLock(&pinLock);
 }
 
 VOID log_mem_store(VOID *ip, VOID* addr_p, UINT64 size, THREADID tid) {
     ull addr = (ull)addr_p;
     ull start_blk = addr / blk_sz;
     ull end_blk = (addr + size - 1)/ blk_sz;
-    PIN_GetLock(&pinLock, tid + 1);
-    globalMData.is_store = true;
+    // PIN_GetLock(&pinLock, tid + 1);
+    // globalMData.is_store = true;
     if(start_blk == end_blk){ // to the same block, no complex logic required.
-        log_bdry(addr, size, (int)tid);
-        PIN_ReleaseLock(&pinLock);
+        log_bdry(addr, size, (int)tid, true);
+        // PIN_ReleaseLock(&pinLock);
         return;
     }
     ull start_acc = (start_blk + 1) * blk_sz - addr; // write until block boundary.
     ull end_acc = addr + size - (end_blk * blk_sz); // bytes to be written at last;
 
-    log_bdry(addr, start_acc, (int)tid);
+    log_bdry(addr, start_acc, (int)tid, true);
     addr = (start_blk + 1) * blk_sz;
     size -= (start_acc + end_acc); // size should be a multiple of blk_sz now
-    log_bdry(addr, size, (int)tid);
+    log_bdry(addr, size, (int)tid, true);
     addr+=size;
-    log_bdry(addr, end_acc, (int)tid);
+    log_bdry(addr, end_acc, (int)tid, true);
 
-    PIN_ReleaseLock(&pinLock);
+    // PIN_ReleaseLock(&pinLock);
 }
 
 // Pin calls this function every time a new instruction is encountered
@@ -172,6 +174,7 @@ VOID Fini(INT32 code, VOID *v)
             write(trace[i], &globalMData.logData[i][0], globalMData.logData[i].size() * sizeof(globalMData.logData[i][0]));
             close(trace[i]);
         }
+        std::cout << globalMData.logData[i].size() << " ";
     }
 }
 

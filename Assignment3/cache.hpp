@@ -198,6 +198,7 @@ void L1::process_log(Processor &proc) {
     proc.totL1Accesses[id]++;
     auto log = logs.front();
     logs.pop_front();
+    ASSERT(log.time < (logs.empty() ? INT32_MAX : logs.front().time));
     if(check_cache(log.addr)) { // also update priority except for the case of upgr.
         if(outstandingNacks.contains(log.addr) and outstandingNacks[log.addr].msg == MsgType::GET) { // if we were waiting to send Get earlier, but now for some reason have the block in cache, we can remove this nacked request.
             outstandingNacks.erase(log.addr);

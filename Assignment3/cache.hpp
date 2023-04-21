@@ -123,6 +123,12 @@ bool L1::check_nacked_requests(Processor &proc) {
             if(check_cache(block_id_nack_request)) { // block in cache
                 // do nothing
             }
+            else if(getReplyWait[block_id_nack_request].second) { // need to send GetX
+                getReplyWait.erase(block_id_nack_request);
+                getXReplyWait.insert(block_id_nack_request);
+                unique_ptr<Message> getx(new Getx(MsgType::GETX, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
+                proc.L2Caches[getx->to].incomingMsg.push_back(move(getx));
+            }
             else {
                 unique_ptr<Message> get(new Get(MsgType::GET, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
                 proc.L2Caches[get->to].incomingMsg.push_back(move(get));

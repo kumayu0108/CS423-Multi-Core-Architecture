@@ -174,7 +174,6 @@ VOID Fini(INT32 code, VOID *v)
             write(trace[i], &globalMData.logData[i][0], globalMData.logData[i].size() * sizeof(globalMData.logData[i][0]));
             close(trace[i]);
         }
-        std::cout << globalMData.logData[i].size() << " ";
     }
 }
 

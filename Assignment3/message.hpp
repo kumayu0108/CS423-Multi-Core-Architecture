@@ -197,6 +197,7 @@ void Put::handle(Processor &proc, bool toL1) {
         }
         l1.getReplyWait.erase(blockAddr); // this is not a part of evict_replace, its specific to put
         l1.evict_replace(proc, blockAddr, State::S);
+        l1.update_priority(blockAddr);
     }
     else { // an LLC can never receive PUT. It's usually a reply w data.
         ASSERT(false); return;
@@ -356,6 +357,7 @@ void Putx::handle(Processor &proc, bool toL1) {
                     l1.cacheData[st][blockAddr].state = State::S; // since it received Get earlier, so it transitions to S, after generating a writeback.
                     proc.L1Caches[put->to].incomingMsg.push_back(move(put));
                     proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                    l1.update_priority(blockAddr);
                 }
                 else if(inv_ack_struct.getXReceived) {
                     ASSERT(!inv_ack_struct.getReceived); // cannot have received both get and getx as directory would go in pending state.
@@ -364,6 +366,9 @@ void Putx::handle(Processor &proc, bool toL1) {
                     l1.evict(blockAddr); // since it received Getx, it has to also invalidate the block
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                     proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                }
+                else {
+                    l1.update_priority(blockAddr);
                 }
                 l1.numAckToCollect.erase(blockAddr);
             }
@@ -627,6 +632,7 @@ void UpgrAck::handle(Processor &proc, bool toL1) {
                     l1.cacheData[st][blockAddr].state = State::S; // since it received Get earlier, so it transitions to S, after generating a writeback.
                     proc.L1Caches[put->to].incomingMsg.push_back(move(put));
                     proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
+                    l1.update_priority(blockAddr);
                 }
                 else if(inv_ack_struct.getXReceived) {
                     ASSERT(!inv_ack_struct.getReceived); // cannot have received both get and getx as directory would go in pending state.
@@ -636,6 +642,7 @@ void UpgrAck::handle(Processor &proc, bool toL1) {
                     proc.L1Caches[putx->to].incomingMsg.push_back(move(putx));
                     proc.L2Caches[wb->to].incomingMsg.push_back(move(wb));
                 }
+                else { l1.update_priority(blockAddr); }
                 l1.numAckToCollect.erase(blockAddr);
             }
         }

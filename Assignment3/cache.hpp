@@ -123,12 +123,6 @@ bool L1::check_nacked_requests(Processor &proc) {
             if(check_cache(block_id_nack_request)) { // block in cache
                 // do nothing
             }
-            else if(getReplyWait[block_id_nack_request].second) { // need to send GetX
-                getReplyWait.erase(block_id_nack_request);
-                getXReplyWait.insert(block_id_nack_request);
-                unique_ptr<Message> getx(new Getx(MsgType::GETX, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
-                proc.L2Caches[getx->to].incomingMsg.push_back(move(getx));
-            }
             else {
                 unique_ptr<Message> get(new Get(MsgType::GET, id, get_llc_bank(block_id_nack_request), true, block_id_nack_request));
                 proc.L2Caches[get->to].incomingMsg.push_back(move(get));
@@ -221,7 +215,7 @@ void L1::process_log(Processor &proc) {
                 if(outstandingNacks.contains(log.addr)) { // if we were waiting to send GetX/Upgr earlier, but now for some reason have the block in cache, we can remove this nacked request.
                     outstandingNacks.erase(log.addr);
                 }
-                update_priority(log.addr);
+                // update_priority(log.addr);
             }
             else if(cache_block.state == State::E) {
                 ASSERT(!getReplyWait.contains(log.addr) and !getXReplyWait.contains(log.addr));
@@ -229,7 +223,7 @@ void L1::process_log(Processor &proc) {
                     outstandingNacks.erase(log.addr);
                 }
                 cache_block.state = State::M;   // transition to M
-                update_priority(log.addr);
+                // update_priority(log.addr);
             }
             else if(upgrReplyWait.contains(log.addr)) { // alreadt sent upgrade
                 proc.totL1UpgrMisses[id]++;
@@ -250,8 +244,9 @@ void L1::process_log(Processor &proc) {
             }
         }
         else {  // read; can always do if in cache
-            update_priority(log.addr);
+            // do nothing
         }
+        update_priority(log.addr);
     }
     else {
         proc.totL1Misses[id]++;
@@ -568,8 +563,12 @@ void Processor::run() {
         ASSERT(l1.incomingMsg.empty());
     }
     std::cout << "Number Of Cycles         : " << numCycles << "\n";
-    ull tot_l1_accesses = 0;
+    ull tot_l1_accesses = 0, tot_l1_misses = 0, tot_l1_upgrade_misses = 0, tot_l2_misses = 0, sm = 0;
     std::cout << "Total Number of L1 Accesses : ";  for(int i = 0; i < NUM_CACHE; i++){ tot_l1_accesses += totL1Accesses[i]; } std::cout << tot_l1_accesses << "\n";
+    std::cout << "Total Number of L1 Misses   : ";  for(int i = 0; i < NUM_CACHE; i++){ tot_l1_misses += totL1Misses[i]; } std::cout << tot_l1_misses << "\n";
+    std::cout << "Total Number of L1 Upgr miss: ";  for(int i = 0; i < NUM_CACHE; i++){ tot_l1_upgrade_misses += totL1UpgrMisses[i]; } std::cout << tot_l1_upgrade_misses << "\n";
+    std::cout << "Total Number of L2 Misses   : ";  for(int i = 0; i < NUM_CACHE; i++){ tot_l2_misses += totL2Misses[i]; } std::cout << tot_l2_misses << "\n";
+
     std::cout << "Number Of L1 Accesses    : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1Accesses[i] << " ";} std :: cout << "\n";
     std::cout << "Number Of L1 Misses      : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1Misses[i] << " ";} std :: cout << "\n";
     std::cout << "Number Of Upgrade misses : "; for(int i = 0; i < NUM_CACHE; i++){ std :: cout << std :: setw(8) << totL1UpgrMisses[i] << " ";} std :: cout << "\n";
@@ -578,6 +577,13 @@ void Processor::run() {
     std :: cout << "Number of Messages received by L1/L2:\n";
     for (auto msg : all_enums) {
         std :: cout << msg.first << "\n"; 
+        sm = 0; 
+        for(int i = 0; i < NUM_CACHE; i++){ sm += msgReceivedL1[i][msg.second]; }
+        std :: cout << "L1 Total : " << sm << "\n";
+        sm = 0; 
+        for(int i = 0; i < NUM_CACHE; i++){ sm += msgReceivedL2[i][msg.second]; }
+        std :: cout << "L2 Total : " << sm << "\n";
+        
         std :: cout << " L1 : "; for(int i = 0; i < NUM_CACHE; i++){std :: cout << std :: setw(8) << msgReceivedL1[i][msg.second] << " ";}
         std :: cout << "\n";
         std :: cout << " L2 : "; for(int i = 0; i < NUM_CACHE; i++){std :: cout << std :: setw(8) << msgReceivedL2[i][msg.second] << " ";}
